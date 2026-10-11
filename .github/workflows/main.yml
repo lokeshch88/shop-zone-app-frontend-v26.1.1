@@ -40,6 +40,8 @@ jobs:
         host: ${{ secrets.AWS_EC2_IP }}
         username: ec2-user
         key: ${{ secrets.AWS_SSH_KEY }}
+        timeout: 20m # <--Increases the allowed step execution window to 20 minutes
+
         script: |
           cd ~/shopzone/frontend
           
