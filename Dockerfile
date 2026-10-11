@@ -1,8 +1,8 @@
 # Build phase using Node
-FROM node:16-alpine as build-stage
+FROM node:24-alpine AS build-stage
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 COPY . .
 RUN npm run build
 
