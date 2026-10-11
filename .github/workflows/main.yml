@@ -11,17 +11,28 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    # Copies your frontend workspace source code over to the AWS machine
-    - name: Copy project files to AWS
+    # Step 1: Install Node and build the React app FAST on GitHub's powerful servers
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        
+    - name: Install Dependencies and Build
+      run: |
+        npm install
+        npm run build
+
+    # Step 2: Copy ONLY the final lightweight HTML/JS 'build' folder and the 'Dockerfile' to AWS
+    - name: Copy production build assets to AWS
       uses: appleboy/scp-action@master
       with:
         host: ${{ secrets.AWS_EC2_IP }}
         username: ec2-user
         key: ${{ secrets.AWS_SSH_KEY }}
-        source: "package*.json,src/,public/,Dockerfile"
+        source: "build/,Dockerfile"
         target: "~/shopzone/frontend"
 
-    # Connects to AWS, triggers the multi-stage Nginx container build, and opens Port 80
+    # Step 3: Connect to AWS via SSH, quickly build the Nginx container image, and run it
     - name: SSH and Launch Frontend Container
       uses: appleboy/ssh-action@master
       with:
@@ -30,14 +41,15 @@ jobs:
         key: ${{ secrets.AWS_SSH_KEY }}
         script: |
           cd ~/shopzone/frontend
-          # Stop and remove old version if running
-          docker stop shopzone-frontend || true
-          docker rm shopzone-frontend || true
           
-          # Build the production-ready optimized Nginx image
+          # Stop and remove old running container if present
+          docker stop shopzone-frontend 2>/dev/null || true
+          docker rm shopzone-frontend 2>/dev/null || true
+          
+          # Instantly builds the lightweight Nginx wrapper image
           docker build -t shopzone-frontend .
           
-          # Run frontend container mapping Port 80 directly to public web traffic
+          # Spin it up on Port 80 inside our shared network space
           docker run -d \
             --name shopzone-frontend \
             --network shopzone-network \
