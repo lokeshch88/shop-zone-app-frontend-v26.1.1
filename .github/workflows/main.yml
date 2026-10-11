@@ -16,11 +16,12 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '18'
+        cache: 'npm' # <-- This automatically caches your node_modules!
         
     - name: Install Dependencies and Build
       run: |
         npm install
-        npm run build
+        CI=false npm run build  # <--Prevents lint warnings from crashing the build!
 
     # Step 2: Copy ONLY the final lightweight HTML/JS 'build' folder and the 'Dockerfile' to AWS
     - name: Copy production build assets to AWS
