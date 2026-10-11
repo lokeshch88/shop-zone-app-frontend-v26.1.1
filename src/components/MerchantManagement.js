@@ -12,6 +12,7 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
+  Alert,
   FormControl,
   Grid,
   IconButton,
@@ -35,17 +36,6 @@ import {
   Store,
   Visibility,
 } from "@mui/icons-material";
-
-const API_URL = "/api/merchants";
-
-const token = localStorage.getItem("authToken");
-
-const api = axios.create({
-  baseURL: API_URL,
-  headers: {
-    Authorization: `Bearer ${token}`,
-  },
-});
 
 /* =========================================================
    ENUM VALUES
@@ -212,9 +202,11 @@ export default function MerchantManagement() {
   const [merchants, setMerchants] = useState([]);
 
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
   const [merchantDialog, setMerchantDialog] = useState(false);
   const [branchDialog, setBranchDialog] = useState(false);
+  const [viewingMerchant, setViewingMerchant] = useState(null);
 
   const [merchant, setMerchant] = useState(emptyMerchant);
   const [branch, setBranch] = useState(emptyBranch);
@@ -254,12 +246,24 @@ export default function MerchantManagement() {
   const loadMerchants = async () => {
     try {
       setLoading(true);
+      setLoadError("");
 
-      const response = await api.get("/");
-
-      setMerchants(response.data || []);
+      const response = await axios.get("/api/merchants");
+      const payload =
+        response.data?.result ?? response.data?.data ?? response.data;
+      const rows = Array.isArray(payload)
+        ? payload
+        : payload?.merchants || payload?.content || payload?.items || [];
+      setMerchants(Array.isArray(rows) ? rows : []);
     } catch (error) {
       console.error("Error loading merchants:", error);
+      setMerchants([]);
+      setLoadError(
+        error?.response?.data?.message ||
+          error?.response?.data?.error ||
+          error?.message ||
+          "Unable to load merchants. Please try again.",
+      );
     } finally {
       setLoading(false);
     }
@@ -271,7 +275,7 @@ export default function MerchantManagement() {
 
   const loadBranches = async (merchantId) => {
     try {
-      const response = await api.get(`/${merchantId}/branches`);
+      const response = await axios.get(`/api/merchants/${merchantId}/branches`);
 
       setBranches(response.data || []);
     } catch (error) {
@@ -431,9 +435,9 @@ export default function MerchantManagement() {
       };
 
       if (editingMerchant) {
-        await api.put(`/${merchant.id}`, payload);
+        await axios.put(`/api/merchants/${merchant.id}`, payload);
       } else {
-        await api.post("/merchants", payload);
+        await axios.post("/api/merchants", payload);
       }
 
       setMerchantDialog(false);
@@ -455,7 +459,7 @@ export default function MerchantManagement() {
     }
 
     try {
-      await api.delete(`/merchants/${id}`);
+      await axios.delete(`/api/merchants/${id}`);
 
       await loadMerchants();
     } catch (error) {
@@ -629,9 +633,15 @@ export default function MerchantManagement() {
       console.log("Payload:", payload);
 
       if (editingBranch) {
-        await api.put(`/${selectedMerchant.id}/branches/${branch.id}`, payload);
+        await axios.put(
+          `/api/merchants/${selectedMerchant.id}/branches/${branch.id}`,
+          payload,
+        );
       } else {
-        await api.post(`/${selectedMerchant.id}/branches`, payload);
+        await axios.post(
+          `/api/merchants/${selectedMerchant.id}/branches`,
+          payload,
+        );
       }
 
       setBranchDialog(false);
@@ -655,7 +665,7 @@ export default function MerchantManagement() {
     }
 
     try {
-      await api.delete(`/merchant-branches/${id}`);
+      await axios.delete(`/merchant-branches/${id}`);
 
       await loadBranches(selectedMerchant.id);
     } catch (error) {
@@ -881,6 +891,25 @@ export default function MerchantManagement() {
             sx={{ mb: 3 }}
           />
 
+          {loadError && (
+            <Alert
+              severity="error"
+              sx={{ mb: 2 }}
+              action={
+                <Button
+                  color="inherit"
+                  size="small"
+                  onClick={loadMerchants}
+                  disabled={loading}
+                >
+                  Retry
+                </Button>
+              }
+            >
+              Could not load merchants: {loadError}
+            </Alert>
+          )}
+
           {/* TABLE */}
 
           <Card>
@@ -995,6 +1024,15 @@ export default function MerchantManagement() {
 
                       <td style={tdStyle}>
                         <Stack direction="row" spacing={0.5}>
+                          <IconButton
+                            color="info"
+                            onClick={() => setViewingMerchant(item)}
+                            title="View merchant details"
+                            aria-label={`View ${item.businessName} details`}
+                          >
+                            <Visibility />
+                          </IconButton>
+
                           <Button
                             size="small"
                             variant="outlined"
@@ -1030,7 +1068,11 @@ export default function MerchantManagement() {
             {filteredMerchants.length === 0 && (
               <Box py={6} textAlign="center">
                 <Typography color="text.secondary">
-                  {loading ? "Loading merchants..." : "No merchants found"}
+                  {loading
+                    ? "Loading merchants..."
+                    : loadError
+                      ? "Merchant records are unavailable."
+                      : "No merchants found"}
                 </Typography>
               </Box>
             )}
@@ -1048,6 +1090,78 @@ export default function MerchantManagement() {
             onChange={handleMerchantChange}
             onSave={saveMerchant}
           />
+
+          <Dialog
+            open={Boolean(viewingMerchant)}
+            onClose={() => setViewingMerchant(null)}
+            maxWidth="md"
+            fullWidth
+          >
+            <DialogTitle>
+              {viewingMerchant?.businessName || "Merchant details"}
+            </DialogTitle>
+            <DialogContent dividers>
+              {viewingMerchant && (
+                <Grid container spacing={1.5}>
+                  {Object.entries(viewingMerchant)
+                    .filter(
+                      ([key, value]) =>
+                        !/password|secret|token|credential|api.?key|private.?key/i.test(
+                          key,
+                        ) &&
+                        ["string", "number", "boolean"].includes(
+                          typeof value,
+                        ) &&
+                        value !== "",
+                    )
+                    .map(([key, value]) => (
+                      <Grid item xs={12} sm={6} md={4} key={key}>
+                        <Box
+                          sx={{
+                            p: 1.25,
+                            height: "100%",
+                            bgcolor: "action.hover",
+                            borderRadius: 1,
+                            overflowWrap: "anywhere",
+                          }}
+                        >
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ textTransform: "capitalize" }}
+                          >
+                            {key
+                              .replace(/([A-Z])/g, " $1")
+                              .replace(/[_-]/g, " ")}
+                          </Typography>
+                          <Typography variant="body2" fontWeight={600}>
+                            {typeof value === "boolean"
+                              ? value
+                                ? "Yes"
+                                : "No"
+                              : String(value)}
+                          </Typography>
+                        </Box>
+                      </Grid>
+                    ))}
+                </Grid>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setViewingMerchant(null)}>Close</Button>
+              <Button
+                variant="contained"
+                startIcon={<Edit />}
+                onClick={() => {
+                  const merchantToEdit = viewingMerchant;
+                  setViewingMerchant(null);
+                  openEditMerchant(merchantToEdit);
+                }}
+              >
+                Edit merchant
+              </Button>
+            </DialogActions>
+          </Dialog>
         </>
       )}
     </Box>

@@ -25,76 +25,87 @@ import MerchantManagement from "./components/MerchantManagement";
 import LandingPage from "./components/LandingPage";
 import RegisterMerchant from "./components/RegisterMerchant";
 import TermsAndConditions from "./components/TermsAndConditions";
+import StoreScopeGuard from "./components/StoreScopeGuard";
+import ShoporaAdminDashboard from "./components/ShoporaAdminDashboard";
 
 function App() {
   return (
     <Router>
       <NavBar />
       <div style={{ padding: "10px 10px 60px 10px" }}>
-        <Routes>
-          <Route path="/" element={<LandingPage />} />
-          <Route
-            path="/terms-and-conditions"
-            element={<TermsAndConditions />}
-          />
-          <Route path="/store/:slug/" element={<HomePage />} />
-          {/* <Route path="/check" element={<HomeCheck />} /> */}
-          <Route path="/store/:slug/login" element={<LoginPage />} />
-          <Route
-            path="/store/:slug/admin-dashboard"
-            element={<AdminDashboard />}
-          />
-          <Route path="/store/:slug/home" element={<HomePage />} />
-          <Route path="/store/:slug/register" element={<RegisterPage />} />
-          <Route path="/store/:slug/profile" element={<ProfilePage />} />
-          <Route path="/store/:slug/cart" element={<CartPage />} />
-          <Route path="/store/:slug/product/:id" element={<ProductPage />} />
-          <Route
-            path="/store/:slug/proceed-payment"
-            element={<PaymentPage />}
-          />
-          <Route
-            path="/store/:slug/payment-result"
-            element={<PaymentResultPage />}
-          />
-          <Route path="/store/:slug/orders" element={<OrdersPage />} />
-          <Route path="/store/:slug/admin/users" element={<UserManagement />} />
-          <Route
-            path="/store/:slug/admin/products"
-            element={<ProductManagement />}
-          />
-          <Route
-            path="/store/:slug/admin/categories"
-            element={<CategoryManagement />}
-          />
-          <Route
-            path="/store/:slug/admin/orders"
-            element={<OrderManagement />}
-          />
-          <Route
-            path="/store/:slug/admin/coupons"
-            element={<CouponManagement />}
-          />
-          <Route
-            path="/store/:slug/order/checkout"
-            element={<CheckoutSummaryPage />}
-          />
-          <Route
-            path="/store/:slug/orders/:orderId"
-            element={<OrderDetails />}
-          />
-          <Route
-            path="/store/:slug/delivery-dashboard"
-            element={<DeliveryDashboard />}
-          />
-          <Route path="*" element={<h1>404 Not Found</h1>} />
-          <Route
-            path="/store/:slug/admin/merchants"
-            element={<MerchantManagement />}
-          />
+        <StoreScopeGuard>
+          <Routes>
+            <Route path="/" element={<LandingPage />} />
+            <Route
+              path="/shopora-control"
+              element={<ShoporaAdminDashboard />}
+            />
+            <Route
+              path="/terms-and-conditions"
+              element={<TermsAndConditions />}
+            />
+            <Route path="/store/:slug/" element={<HomePage />} />
+            {/* <Route path="/check" element={<HomeCheck />} /> */}
+            <Route path="/store/:slug/login" element={<LoginPage />} />
+            <Route
+              path="/store/:slug/admin-dashboard"
+              element={<AdminDashboard />}
+            />
+            <Route path="/store/:slug/home" element={<HomePage />} />
+            <Route path="/store/:slug/register" element={<RegisterPage />} />
+            <Route path="/store/:slug/profile" element={<ProfilePage />} />
+            <Route path="/store/:slug/cart" element={<CartPage />} />
+            <Route path="/store/:slug/product/:id" element={<ProductPage />} />
+            <Route
+              path="/store/:slug/proceed-payment"
+              element={<PaymentPage />}
+            />
+            <Route
+              path="/store/:slug/payment-result"
+              element={<PaymentResultPage />}
+            />
+            <Route path="/store/:slug/orders" element={<OrdersPage />} />
+            <Route
+              path="/store/:slug/admin/users"
+              element={<UserManagement />}
+            />
+            <Route
+              path="/store/:slug/admin/products"
+              element={<ProductManagement />}
+            />
+            <Route
+              path="/store/:slug/admin/categories"
+              element={<CategoryManagement />}
+            />
+            <Route
+              path="/store/:slug/admin/orders"
+              element={<OrderManagement />}
+            />
+            <Route
+              path="/store/:slug/admin/coupons"
+              element={<CouponManagement />}
+            />
+            <Route
+              path="/store/:slug/order/checkout"
+              element={<CheckoutSummaryPage />}
+            />
+            <Route
+              path="/store/:slug/orders/:orderId"
+              element={<OrderDetails />}
+            />
+            <Route
+              path="/store/:slug/delivery-dashboard"
+              element={<DeliveryDashboard />}
+            />
+            <Route path="*" element={<h1>404 Not Found</h1>} />
+            <Route
+              path="/store/:slug/admin/merchants"
+              element={<MerchantManagement />}
+            />
 
-          <Route path="/register-merchants" element={<RegisterMerchant />} />
-        </Routes>
+            <Route path="/register-merchants" element={<RegisterMerchant />} />
+          </Routes>
+        </StoreScopeGuard>
       </div>
       <Footer />
     </Router>

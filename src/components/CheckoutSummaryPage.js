@@ -23,12 +23,37 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useParams } from "react-router-dom";
 import axios from "../utils/AxiosInstance";
 import { fetchLatLong } from "../utils/AddressUtils";
+import { validateCartForStore } from "../utils/MerchantCartValidation";
+
+const getAddressList = (data) => {
+  const candidates = [
+    data,
+    data?.result,
+    data?.data,
+    data?.addresses,
+    data?.result?.addresses,
+    data?.data?.addresses,
+  ];
+  return candidates.find(Array.isArray) || [];
+};
 
 const CheckoutSummaryPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const token = localStorage.getItem("authToken");
-  const { userId, items = [] } = location.state || {};
+  const userId = location.state?.userId || localStorage.getItem("userId");
+  const stateItems = location.state?.items;
+  const items =
+    Array.isArray(stateItems) && stateItems.length
+      ? stateItems
+      : (() => {
+          try {
+            const savedItems = JSON.parse(localStorage.getItem("cart") || "[]");
+            return Array.isArray(savedItems) ? savedItems : [];
+          } catch {
+            return [];
+          }
+        })();
 
   const [cartItems, setCartItems] = useState(items);
   const [totalAmount, setTotalAmount] = useState(0);
@@ -45,15 +70,21 @@ const CheckoutSummaryPage = () => {
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState("");
   const [cashExtraCharge, setCashExtraCharge] = useState(0);
   const [paymentLoading, setPaymentLoading] = useState(false);
+  const [checkoutStoreValidated, setCheckoutStoreValidated] = useState(false);
   const [addressDialogOpen, setAddressDialogOpen] = useState(false);
   const [editingAddressId, setEditingAddressId] = useState(null);
+  const [addressErrors, setAddressErrors] = useState({});
   const [addressForm, setAddressForm] = useState({
     addressLine: "",
+    addressLine2: "",
+    landmark: "",
     city: "",
     district: "",
     state: "",
     country: "India",
     pincode: "",
+    phone: "",
+    name: "",
   });
 
   // Coupon Success Dialog
@@ -69,6 +100,8 @@ const CheckoutSummaryPage = () => {
     if (!addr) return "";
     return [
       addr.addressLine,
+      addr.addressLine2,
+      addr.landmark,
       addr.city,
       addr.district,
       addr.state,
@@ -81,15 +114,73 @@ const CheckoutSummaryPage = () => {
 
   const { slug } = useParams();
 
+  useEffect(() => {
+    let isCurrent = true;
+    const verifyCheckoutStore = async () => {
+      if (!token || !userId) {
+        navigate(`/store/${slug}/cart`, {
+          replace: true,
+          state: { checkoutWarning: "Please sign in to continue checkout." },
+        });
+        return;
+      }
+
+      try {
+        await validateCartForStore({
+          axios,
+          slug,
+          items: cartItems,
+          registeredMerchantId: localStorage.getItem("merchantId"),
+        });
+        if (isCurrent) setCheckoutStoreValidated(true);
+      } catch (error) {
+        if (isCurrent) {
+          navigate(`/store/${slug}/cart`, {
+            replace: true,
+            state: {
+              checkoutWarning:
+                error?.response?.data?.message ||
+                error?.message ||
+                "This cart could not be verified for the current store.",
+              invalidCartItems: error?.invalidCartItems || [],
+            },
+          });
+        }
+      }
+    };
+
+    verifyCheckoutStore();
+    return () => {
+      isCurrent = false;
+    };
+  }, [cartItems, navigate, slug, token, userId]);
+
+  const getLocalPhone = (value) => {
+    const digits = String(value || "").replace(/\D/g, "");
+    return digits.length === 12 && digits.startsWith("91")
+      ? digits.slice(2)
+      : digits.slice(0, 10);
+  };
+
+  const updateAddressField = (field, value) => {
+    setAddressForm((prev) => ({ ...prev, [field]: value }));
+    setAddressErrors((prev) => ({ ...prev, [field]: "" }));
+  };
+
   const resetAddressForm = () => {
     setAddressForm({
       addressLine: "",
+      addressLine2: "",
+      landmark: "",
       city: "",
       district: "",
       state: "",
       country: "India",
       pincode: "",
+      phone: "",
+      name: "",
     });
+    setAddressErrors({});
     setEditingAddressId(null);
   };
 
@@ -97,12 +188,17 @@ const CheckoutSummaryPage = () => {
     if (address) {
       setAddressForm({
         addressLine: address.addressLine || "",
+        addressLine2: address.addressLine2 || "",
+        landmark: address.landmark || "",
         city: address.city || "",
         district: address.district || "",
         state: address.state || "",
         country: address.country || "India",
         pincode: address.pincode || "",
+        phone: getLocalPhone(address.phone),
+        name: address.name || "",
       });
+      setAddressErrors({});
       setEditingAddressId(address.id || null);
     } else {
       resetAddressForm();
@@ -111,11 +207,15 @@ const CheckoutSummaryPage = () => {
   };
 
   const loadAddresses = async () => {
-    if (!userId) return;
+    if (!userId || !token) {
+      setAddresses([]);
+      setSelectedAddress(null);
+      return;
+    }
 
     try {
       const res = await axios.get(`/address/user/${userId}`);
-      const addrList = res.data || [];
+      const addrList = getAddressList(res.data);
       setAddresses(addrList);
 
       if (!addrList.length) {
@@ -124,7 +224,14 @@ const CheckoutSummaryPage = () => {
         return;
       }
 
-      const fallbackAddress = addrList[selectedAddressIndex] || addrList[0];
+      const selectedId = selectedAddress?.id ?? selectedAddress?.addressId;
+      const fallbackAddress =
+        addrList.find(
+          (address) =>
+            String(address.id ?? address.addressId) === String(selectedId),
+        ) ||
+        addrList[selectedAddressIndex] ||
+        addrList[0];
       setSelectedAddress(fallbackAddress);
       setSelectedAddressIndex(addrList.indexOf(fallbackAddress));
     } catch (error) {
@@ -140,28 +247,43 @@ const CheckoutSummaryPage = () => {
       return;
     }
 
-    const requiredFields = [
-      addressForm.addressLine,
-      addressForm.city,
-      addressForm.district,
-      addressForm.state,
-      addressForm.pincode,
-    ];
+    const localPhone = getLocalPhone(addressForm.phone);
+    const pincodeDigits = String(addressForm.pincode || "").replace(/\D/g, "");
+    const errors = {
+      name: addressForm.name.trim() ? "" : "Name is required.",
+      addressLine: addressForm.addressLine.trim()
+        ? ""
+        : "Address line is required.",
+      city: addressForm.city.trim() ? "" : "City is required.",
+      district: addressForm.district.trim() ? "" : "District is required.",
+      state: addressForm.state.trim() ? "" : "State is required.",
+      pincode: /^\d{6}$/.test(pincodeDigits)
+        ? ""
+        : "Enter a valid 6-digit PIN code.",
+      phone: /^\d{10}$/.test(localPhone)
+        ? ""
+        : "Enter a valid 10-digit phone number.",
+    };
+    setAddressErrors(errors);
 
-    if (requiredFields.some((value) => !String(value).trim())) {
-      alert("Please fill in all address details.");
+    if (Object.values(errors).some(Boolean)) {
       return;
     }
 
     try {
-      const coords = await fetchLatLong(addressForm);
+      const addressPayload = {
+        ...addressForm,
+        phone: localPhone,
+        pincode: pincodeDigits,
+      };
+      const coords = await fetchLatLong(addressPayload);
       if (!coords) {
         alert("Could not find latitude and longitude for the entered address.");
         return;
       }
 
       const payload = {
-        ...addressForm,
+        ...addressPayload,
         userId: Number(userId),
         latitude: coords.latitude,
         longitude: coords.longitude,
@@ -548,6 +670,7 @@ const CheckoutSummaryPage = () => {
                 razorpay_signature: response.razorpay_signature,
                 id: orderIdBackend,
                 paymentMethod: methodKey,
+
                 paymentStatus: "PAID",
                 paymentGateway: "RAZORPAY",
                 currency: "INR",
@@ -576,7 +699,7 @@ const CheckoutSummaryPage = () => {
             email: "test@example.com",
             contact: "9999999999",
           },
-          theme: { color: "#1976d2" },
+          theme: { color: "#a1d219" },
         };
 
         new window.Razorpay(options).open();
@@ -631,26 +754,51 @@ const CheckoutSummaryPage = () => {
     ).toFixed(2),
   );
 
+  if (!checkoutStoreValidated) {
+    return (
+      <Container maxWidth="lg" sx={{ py: 6, textAlign: "center" }}>
+        <Typography color="text.secondary">
+          Verifying store and cart before checkout...
+        </Typography>
+      </Container>
+    );
+  }
+
   return (
-    <Container maxWidth="lg" sx={{ py: 3 }}>
+    <Container
+      maxWidth="lg"
+      sx={{ px: { xs: 1, sm: 2 }, py: { xs: 1.5, sm: 2, md: 3 } }}
+    >
       <Box sx={{ maxWidth: 1100, mx: "auto" }}>
-        <Typography variant="h4" fontWeight={800} gutterBottom>
+        <Typography
+          variant="h4"
+          fontWeight={800}
+          sx={{ fontSize: { xs: "1.5rem", sm: "2.125rem" }, lineHeight: 1.2 }}
+        >
           Checkout Summary
         </Typography>
-        <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          sx={{ mb: { xs: 1.5, sm: 3 }, mt: 0.5 }}
+        >
           Review your order, update delivery details, and complete payment.
         </Typography>
 
-        <Grid container spacing={3} alignItems="flex-start">
-          <Grid item xs={12} md={8}>
+        <Grid
+          container
+          spacing={{ xs: 1.5, sm: 2, md: 3 }}
+          alignItems="flex-start"
+        >
+          <Grid size={{ xs: 12, md: 8 }}>
             <Card
               sx={{
-                mb: 3,
-                borderRadius: 4,
+                mb: { xs: 1.5, md: 3 },
+                borderRadius: 2,
                 boxShadow: "0 10px 30px rgba(0,0,0,0.06)",
               }}
             >
-              <CardContent sx={{ p: { xs: 2, md: 3 } }}>
+              <CardContent sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
                 <Box
                   sx={{
                     display: "flex",
@@ -701,10 +849,14 @@ const CheckoutSummaryPage = () => {
                   <Box
                     sx={{
                       display: "flex",
-                      gap: 2,
+                      gap: { xs: 1, sm: 1.5 },
                       overflowX: "auto",
-                      pb: 1,
-                      "&::-webkit-scrollbar": { height: "8px" },
+                      pb: 0.5,
+                      scrollSnapType: "x mandatory",
+                      overscrollBehaviorX: "contain",
+                      "&::-webkit-scrollbar": {
+                        height: { xs: "4px", sm: "6px" },
+                      },
                       "&::-webkit-scrollbar-thumb": {
                         backgroundColor: "#d5d9e0",
                         borderRadius: "999px",
@@ -713,14 +865,18 @@ const CheckoutSummaryPage = () => {
                   >
                     {addresses.map((addr, index) => (
                       <Card
-                        key={addr.id || index}
+                        key={addr.id ?? addr.addressId ?? index}
                         onClick={() => {
                           setSelectedAddressIndex(index);
                           setSelectedAddress(addr);
                         }}
                         sx={{
-                          minWidth: { xs: 220, sm: 240 },
-                          flexShrink: 0,
+                          flex: {
+                            xs: "0 0 min(78vw, 285px)",
+                            sm: "0 0 270px",
+                          },
+                          minWidth: 0,
+                          height: { xs: 120, sm: 150 },
                           cursor: "pointer",
                           border:
                             selectedAddressIndex === index
@@ -729,17 +885,28 @@ const CheckoutSummaryPage = () => {
                           backgroundColor:
                             selectedAddressIndex === index ? "#eef6ff" : "#fff",
                           transition: "all 0.2s ease",
-                          borderRadius: 3,
+                          borderRadius: 2,
                           position: "relative",
+                          scrollSnapAlign: "start",
                         }}
                       >
-                        <CardContent sx={{ p: 2.2 }}>
+                        <CardContent
+                          sx={{
+                            height: "100%",
+                            boxSizing: "border-box",
+                            display: "flex",
+                            flexDirection: "column",
+                            p: { xs: 1, sm: 1.25 },
+                            "&:last-child": { pb: { xs: 1, sm: 1.25 } },
+                          }}
+                        >
                           <Box
                             sx={{
                               display: "flex",
                               justifyContent: "space-between",
-                              alignItems: "center",
-                              mb: 1,
+                              alignItems: "flex-start",
+                              gap: 0.5,
+                              mb: 0.5,
                             }}
                           >
                             <Chip
@@ -751,33 +918,75 @@ const CheckoutSummaryPage = () => {
                                   : "default"
                               }
                             />
-                            <Box sx={{ display: "flex", gap: 0.5 }}>
+                            <Box
+                              sx={{ display: "flex", gap: 0.25, flexShrink: 0 }}
+                            >
                               <Button
                                 size="small"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   openAddressDialog(addr);
                                 }}
-                                sx={{ minWidth: 0, px: 1 }}
+                                sx={{
+                                  minWidth: 0,
+                                  px: 0.5,
+                                  py: 0.25,
+                                  fontSize: "0.68rem",
+                                }}
                               >
-                                Edit
+                                View & Edit
                               </Button>
                               <Button
                                 size="small"
                                 color="error"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  deleteAddress(addr.id, index);
+                                  deleteAddress(
+                                    addr.id ?? addr.addressId,
+                                    index,
+                                  );
                                 }}
-                                sx={{ minWidth: 0, px: 1 }}
+                                sx={{
+                                  minWidth: 0,
+                                  px: 0.5,
+                                  py: 0.25,
+                                  fontSize: "0.72rem",
+                                }}
                               >
                                 Delete
                               </Button>
                             </Box>
                           </Box>
                           <Typography
+                            variant="subtitle2"
+                            fontWeight={700}
+                            noWrap
+                            sx={{ mt: 0.5, lineHeight: 1.25 }}
+                          >
+                            {addr.name || "Customer"}
+                          </Typography>
+                          {addr.phone && (
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              noWrap
+                              sx={{ mt: 0.25, lineHeight: 1.25 }}
+                            >
+                              +91 {getLocalPhone(addr.phone)}
+                            </Typography>
+                          )}
+                          <Typography
                             variant="body2"
-                            sx={{ lineHeight: 1.6, fontSize: "0.88rem" }}
+                            sx={{
+                              mt: 0.5,
+                              lineHeight: 1.4,
+                              fontSize: { xs: "0.78rem", sm: "0.85rem" },
+                              overflowWrap: "anywhere",
+                              display: "-webkit-box",
+                              WebkitBoxOrient: "vertical",
+                              WebkitLineClamp: 3,
+                              overflow: "hidden",
+                            }}
                           >
                             {formatAddress(addr)}
                           </Typography>
@@ -788,22 +997,27 @@ const CheckoutSummaryPage = () => {
                     <Card
                       onClick={() => openAddressDialog()}
                       sx={{
-                        minWidth: 200,
-                        flexShrink: 0,
+                        flex: {
+                          xs: "0 0 min(70vw, 250px)",
+                          sm: "0 0 220px",
+                        },
+                        minWidth: 0,
+                        height: { xs: 120, sm: 150 },
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
                         border: "2px dashed #1976d2",
                         cursor: "pointer",
                         backgroundColor: "#f8fbff",
-                        borderRadius: 3,
+                        borderRadius: 2,
+                        scrollSnapAlign: "start",
                       }}
                     >
-                      <CardContent sx={{ textAlign: "center", p: 2 }}>
+                      <CardContent sx={{ textAlign: "center", p: 1.25 }}>
                         <Typography
                           color="primary"
                           fontWeight={700}
-                          sx={{ fontSize: "0.92rem" }}
+                          sx={{ fontSize: { xs: "0.78rem", sm: "0.9rem" } }}
                         >
                           + Add New Address
                         </Typography>
@@ -814,7 +1028,11 @@ const CheckoutSummaryPage = () => {
 
                 {selectedAddress && (
                   <Typography
-                    sx={{ mt: 2, color: "text.secondary", fontSize: "0.9rem" }}
+                    sx={{
+                      mt: { xs: 0.75, sm: 1 },
+                      color: "text.secondary",
+                      fontSize: { xs: "0.78rem", sm: "0.9rem" },
+                    }}
                   >
                     Estimated Delivery By:{" "}
                     <strong>{deliveryDate || "3-5 days"}</strong>
@@ -825,12 +1043,12 @@ const CheckoutSummaryPage = () => {
 
             <Card
               sx={{
-                mb: 3,
-                borderRadius: 4,
+                mb: { xs: 1.5, md: 3 },
+                borderRadius: 2,
                 boxShadow: "0 10px 30px rgba(0,0,0,0.06)",
               }}
             >
-              <CardContent sx={{ p: { xs: 2, md: 3 } }}>
+              <CardContent sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
                 <Typography variant="h6" fontWeight={700} gutterBottom>
                   Apply Coupon
                 </Typography>
@@ -867,12 +1085,12 @@ const CheckoutSummaryPage = () => {
 
             <Card
               sx={{
-                mb: 3,
-                borderRadius: 4,
+                mb: { xs: 1.5, md: 3 },
+                borderRadius: 2,
                 boxShadow: "0 10px 30px rgba(0,0,0,0.06)",
               }}
             >
-              <CardContent sx={{ p: { xs: 2, md: 3 } }}>
+              <CardContent sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
                 <Typography variant="h6" fontWeight={700} gutterBottom>
                   Payment Method
                 </Typography>
@@ -930,21 +1148,24 @@ const CheckoutSummaryPage = () => {
             </Card>
           </Grid>
 
-          <Grid item xs={12} md={4}>
+          <Grid size={{ xs: 12, md: 4 }}>
             <Card
               sx={{
-                borderRadius: 4,
+                borderRadius: 2,
                 boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
                 position: { md: "sticky" },
                 top: 24,
               }}
             >
-              <CardContent sx={{ p: { xs: 2.5, md: 3 } }}>
+              <CardContent sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
                 <Typography variant="h6" fontWeight={700} gutterBottom>
                   Order Summary
                 </Typography>
 
-                <Stack spacing={1.5} sx={{ my: 2 }}>
+                <Stack
+                  spacing={{ xs: 1, md: 1.5 }}
+                  sx={{ my: { xs: 1.25, md: 2 } }}
+                >
                   {cartItems.map((item, index) => {
                     const price = item.price || item.variant?.price || 0;
                     return (
@@ -970,7 +1191,7 @@ const CheckoutSummaryPage = () => {
                   })}
                 </Stack>
 
-                <Divider sx={{ my: 2 }} />
+                <Divider sx={{ my: { xs: 1.25, md: 2 } }} />
 
                 <Box
                   sx={{
@@ -1017,7 +1238,7 @@ const CheckoutSummaryPage = () => {
                   <Typography>₹{cashExtraCharge}</Typography>
                 </Box>
 
-                <Divider sx={{ my: 2 }} />
+                <Divider sx={{ my: { xs: 1.25, md: 2 } }} />
 
                 <Box
                   sx={{
@@ -1056,74 +1277,135 @@ const CheckoutSummaryPage = () => {
         onClose={() => setAddressDialogOpen(false)}
         fullWidth
         maxWidth="sm"
+        PaperProps={{ sx: { mx: 1, borderRadius: 2 } }}
       >
-        <DialogTitle>
+        <DialogTitle sx={{ px: { xs: 2, sm: 3 }, py: 1.5, fontSize: "1.1rem" }}>
           {editingAddressId ? "Edit Address" : "Add New Address"}
         </DialogTitle>
-        <DialogContent>
-          <Grid container spacing={2} sx={{ mt: 0 }}>
-            <Grid item xs={12}>
+        <DialogContent sx={{ px: { xs: 2, sm: 3 }, py: 1 }}>
+          <Grid container spacing={{ xs: 1.25, sm: 2 }} sx={{ mt: 0 }}>
+            <Grid size={12}>
               <TextField
                 fullWidth
+                size="small"
+                label="Name"
+                required
+                value={addressForm.name}
+                error={Boolean(addressErrors.name)}
+                helperText={addressErrors.name}
+                onChange={(e) => updateAddressField("name", e.target.value)}
+              />
+            </Grid>
+            <Grid size={12}>
+              <TextField
+                fullWidth
+                size="small"
                 label="Address Line"
+                required
                 value={addressForm.addressLine}
+                error={Boolean(addressErrors.addressLine)}
+                helperText={addressErrors.addressLine}
                 onChange={(e) =>
-                  setAddressForm((prev) => ({
-                    ...prev,
-                    addressLine: e.target.value,
-                  }))
+                  updateAddressField("addressLine", e.target.value)
                 }
               />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid size={12}>
               <TextField
                 fullWidth
+                size="small"
+                label="Address Line 2"
+                value={addressForm.addressLine2}
+                onChange={(e) =>
+                  updateAddressField("addressLine2", e.target.value)
+                }
+              />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField
+                fullWidth
+                size="small"
                 label="City"
+                required
                 value={addressForm.city}
-                onChange={(e) =>
-                  setAddressForm((prev) => ({ ...prev, city: e.target.value }))
-                }
+                error={Boolean(addressErrors.city)}
+                helperText={addressErrors.city}
+                onChange={(e) => updateAddressField("city", e.target.value)}
               />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 fullWidth
+                size="small"
                 label="District"
+                required
                 value={addressForm.district}
-                onChange={(e) =>
-                  setAddressForm((prev) => ({
-                    ...prev,
-                    district: e.target.value,
-                  }))
-                }
+                error={Boolean(addressErrors.district)}
+                helperText={addressErrors.district}
+                onChange={(e) => updateAddressField("district", e.target.value)}
               />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 fullWidth
+                size="small"
                 label="State"
+                required
                 value={addressForm.state}
+                error={Boolean(addressErrors.state)}
+                helperText={addressErrors.state}
+                onChange={(e) => updateAddressField("state", e.target.value)}
+              />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Pincode"
+                required
+                value={addressForm.pincode}
+                error={Boolean(addressErrors.pincode)}
+                helperText={addressErrors.pincode}
+                inputProps={{ inputMode: "numeric", maxLength: 6 }}
                 onChange={(e) =>
-                  setAddressForm((prev) => ({ ...prev, state: e.target.value }))
+                  updateAddressField(
+                    "pincode",
+                    e.target.value.replace(/\D/g, "").slice(0, 6),
+                  )
                 }
               />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid size={12}>
               <TextField
                 fullWidth
-                label="Pincode"
-                value={addressForm.pincode}
+                size="small"
+                label="Phone Number"
+                type="tel"
+                required
+                value={addressForm.phone}
+                error={Boolean(addressErrors.phone)}
+                helperText={addressErrors.phone}
+                inputProps={{ inputMode: "numeric", maxLength: 10 }}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <Typography color="text.disabled" fontWeight={700}>
+                        +91
+                      </Typography>
+                    </InputAdornment>
+                  ),
+                }}
                 onChange={(e) =>
-                  setAddressForm((prev) => ({
-                    ...prev,
-                    pincode: e.target.value,
-                  }))
+                  updateAddressField(
+                    "phone",
+                    e.target.value.replace(/\D/g, "").slice(0, 10),
+                  )
                 }
               />
             </Grid>
           </Grid>
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2 }}>
+        <DialogActions sx={{ px: { xs: 2, sm: 3 }, pb: 1.5, pt: 0.5 }}>
           <Button onClick={() => setAddressDialogOpen(false)} color="inherit">
             Cancel
           </Button>

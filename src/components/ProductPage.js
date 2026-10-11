@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Container,
   Grid,
@@ -24,11 +24,57 @@ import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import { useParams, useNavigate } from "react-router-dom";
 import axios from "../utils/AxiosInstance";
 
+const NON_VARIANT_ATTRIBUTE_KEYS = new Set([
+  "id",
+  "variantid",
+  "productid",
+  "merchantid",
+  "sku",
+  "price",
+  "mrp",
+  "compareprice",
+  "stock",
+  "quantity",
+  "quantityinstock",
+  "image",
+  "imageurl",
+  "variantimageurl",
+  "imagebase64",
+  "images",
+  "imageurls",
+  "imageindex",
+  "selectionkey",
+  "selectionlabel",
+  "displayorder",
+  "primaryimage",
+  "isprimary",
+  "createdat",
+  "updatedat",
+]);
+
+const getVariantAttributes = (variant) =>
+  Object.entries(variant || {}).filter(([key, value]) => {
+    const normalizedKey = key.replace(/[_\s-]/g, "").toLowerCase();
+    return (
+      !NON_VARIANT_ATTRIBUTE_KEYS.has(normalizedKey) &&
+      (typeof value === "string" || typeof value === "number") &&
+      String(value).trim() !== ""
+    );
+  });
+
+const formatVariantAttribute = (key) =>
+  key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/^./, (character) => character.toUpperCase());
+
 const ProductPage = () => {
   const { id, slug } = useParams();
   const navigate = useNavigate();
 
   const [product, setProduct] = useState(null);
+  const [storeName, setStoreName] = useState(slug);
+  const [selectedVariantOptions, setSelectedVariantOptions] = useState({});
   const [recommended, setRecommended] = useState([]);
   // reviews pagination
   const [reviewsList, setReviewsList] = useState([]);
@@ -41,7 +87,10 @@ const ProductPage = () => {
     severity: "success",
   });
   const [imageModalOpen, setImageModalOpen] = useState(false);
+  const [productDetailsDrawerOpen, setProductDetailsDrawerOpen] =
+    useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const imageTouchStartX = useRef(null);
   // Review image modal state
   const [reviewImageModalOpen, setReviewImageModalOpen] = useState(false);
   const [reviewImages, setReviewImages] = useState([]);
@@ -74,7 +123,10 @@ const ProductPage = () => {
     const loadMerchantReviewFlag = async () => {
       try {
         const response = await axios.get(`/api/merchants/by-slug/`);
-        const merchant = response.data || {};
+        const merchant = response.data?.result || response.data || {};
+        setStoreName(
+          merchant.businessName || merchant.storeName || merchant.name || slug,
+        );
         const isReviewsAllowed =
           reviewFlagEnabled(merchant?.reviewsAllowed) ||
           reviewFlagEnabled(merchant?.allowReviews) ||
@@ -94,7 +146,14 @@ const ProductPage = () => {
       } catch (error) {
         try {
           const fallbackResponse = await axios.get(`/api/merchants/by-slug`);
-          const merchant = fallbackResponse.data || {};
+          const merchant =
+            fallbackResponse.data?.result || fallbackResponse.data || {};
+          setStoreName(
+            merchant.businessName ||
+              merchant.storeName ||
+              merchant.name ||
+              slug,
+          );
           const isReviewsAllowed =
             reviewFlagEnabled(merchant?.reviewsAllowed) ||
             reviewFlagEnabled(merchant?.allowReviews) ||
@@ -113,6 +172,7 @@ const ProductPage = () => {
           }
         } catch {
           console.error("Failed to fetch merchant review flag");
+          setStoreName(slug);
           setReviewsAllowed(false);
         }
       }
@@ -127,9 +187,16 @@ const ProductPage = () => {
     axios
       .get(`/products/${id}/with-rating`)
       .then((response) => {
+        // Expected product response includes variants: [{ color, size, price, stock, imageUrl }].
         const prod = response.data;
         setProduct(prod);
         setCurrentImageIndex(0);
+        const variants = Array.isArray(prod.variants) ? prod.variants : [];
+        setSelectedVariantOptions(
+          variants.length === 1
+            ? Object.fromEntries(getVariantAttributes(variants[0]))
+            : {},
+        );
 
         axios
           .get(`/products/category/${prod.categoryId}`)
@@ -289,27 +356,160 @@ const ProductPage = () => {
 
   const handleAddToCart = () => {
     try {
-      const existingCart = JSON.parse(localStorage.getItem("cart")) || [];
-      const existingIndex = existingCart.findIndex(
-        (item) => item.id === product.id,
-      );
+      const variants = Array.isArray(product.variants) ? product.variants : [];
+      if (variants.length > 0 && !selectedVariant) {
+        const missingOptions = variantAttributeKeys
+          .filter(
+            (key) =>
+              selectedVariantOptions[key] === undefined ||
+              selectedVariantOptions[key] === null ||
+              selectedVariantOptions[key] === "",
+          )
+          .map(formatVariantAttribute);
+        setSnackbar({
+          open: true,
+          message: missingOptions.length
+            ? `Please select ${missingOptions.join(", ")}.`
+            : "Please select a valid variant combination.",
+          severity: "warning",
+        });
+        return;
+      }
+      if (
+        (selectedVariant &&
+          selectedVariant.stock != null &&
+          Number(selectedVariant.stock) <= 0) ||
+        (!selectedVariant &&
+          product.quantityInStock != null &&
+          Number(product.quantityInStock) <= 0)
+      ) {
+        setSnackbar({
+          open: true,
+          message: "This product variant is out of stock.",
+          severity: "warning",
+        });
+        return;
+      }
 
+      const existingCart = JSON.parse(localStorage.getItem("cart")) || [];
+      const variantKey = selectedVariant
+        ? JSON.stringify(
+            Object.fromEntries(
+              variantAttributeKeys.map((key) => [key, selectedVariant[key]]),
+            ),
+          )
+        : "";
+      const existingIndex = existingCart.findIndex((item) => {
+        if (
+          item.id !== product.id ||
+          (item.storeSlug && item.storeSlug !== slug)
+        )
+          return false;
+        const existingVariantKey =
+          item.variant?.selectionKey ||
+          (item.variant
+            ? JSON.stringify(
+                Object.fromEntries(
+                  variantAttributeKeys
+                    .filter(
+                      (key) =>
+                        item.variant[key] !== undefined &&
+                        item.variant[key] !== null,
+                    )
+                    .map((key) => [key, item.variant[key]]),
+                ),
+              )
+            : "");
+        return existingVariantKey === variantKey;
+      });
+      const stockValue = selectedVariant?.stock ?? product.quantityInStock;
+      const availableStock =
+        stockValue === null || stockValue === undefined || stockValue === ""
+          ? Number.NaN
+          : Number(stockValue);
+      if (
+        Number.isFinite(availableStock) &&
+        availableStock >= 0 &&
+        (existingIndex >= 0
+          ? Number(existingCart[existingIndex].quantity || 0)
+          : 0) >= availableStock
+      ) {
+        setSnackbar({
+          open: true,
+          message: "The selected quantity is no longer available.",
+          severity: "warning",
+        });
+        return;
+      }
+
+      const cartVariantImage =
+        variantImages[0]?.imageUrl ||
+        getVariantImage(selectedVariant) ||
+        getDisplayImage(product);
       const updatedCart =
         existingIndex > -1
           ? existingCart.map((item, i) =>
               i === existingIndex
-                ? { ...item, quantity: item.quantity + 1 }
+                ? {
+                    ...item,
+                    storeSlug: slug,
+                    storeName:
+                      storeName ||
+                      product.businessName ||
+                      product.storeName ||
+                      slug,
+                    merchantId:
+                      product.merchantId ||
+                      product.merchant?.id ||
+                      item.merchantId,
+                    image: cartVariantImage,
+                    variant: item.variant
+                      ? {
+                          ...item.variant,
+                          images: variantImages,
+                          imageUrl:
+                            variantImages[0]?.imageUrl ||
+                            getVariantImage(selectedVariant),
+                        }
+                      : item.variant,
+                    quantity: item.quantity + 1,
+                  }
                 : item,
             )
           : [
               ...existingCart,
               {
                 id: product.id,
+                storeSlug: slug,
+                storeName:
+                  storeName ||
+                  product.businessName ||
+                  product.storeName ||
+                  slug,
+                merchantId: product.merchantId || product.merchant?.id || null,
                 name: product.name,
-                image: getDisplayImage(product),
+                image: cartVariantImage,
                 description: product.description,
-                price: product.price,
+                price: selectedVariant?.price ?? product.price,
                 comparePrice: product.comparePrice,
+                ...(selectedVariant
+                  ? {
+                      variant: {
+                        ...selectedVariant,
+                        images: variantImages,
+                        imageUrl:
+                          variantImages[0]?.imageUrl ||
+                          getVariantImage(selectedVariant),
+                        selectionKey: variantKey,
+                        selectionLabel: variantAttributeKeys
+                          .map(
+                            (key) =>
+                              `${formatVariantAttribute(key)}: ${selectedVariant[key]}`,
+                          )
+                          .join(" · "),
+                      },
+                    }
+                  : {}),
                 quantity: 1,
               },
             ];
@@ -342,18 +542,22 @@ const ProductPage = () => {
     ) {
       return url;
     }
-    if (url.startsWith("/")) {
-      return `http://localhost:8080${url}`;
-    }
-    return url;
+    const apiBase = (axios.defaults.baseURL || window.location.origin).replace(
+      /\/+$/,
+      "",
+    );
+    return `${apiBase}/${url.replace(/^\/+/, "")}`;
   };
 
   const getProductImages = (item) => {
     const rawImages = Array.isArray(item?.images) ? [...item.images] : [];
 
-    if (!rawImages.length && (item?.imageUrl || item?.imageBase64)) {
+    if (
+      !rawImages.length &&
+      (item?.imageUrl || item?.image || item?.imageBase64)
+    ) {
       rawImages.push({
-        imageUrl: item.imageUrl || "",
+        imageUrl: item.imageUrl || item.image || "",
         imageBase64: item.imageBase64 || null,
         primaryImage: true,
       });
@@ -363,6 +567,7 @@ const ProductPage = () => {
       .map((image, index) => {
         const imageUrl =
           image?.imageUrl ||
+          image?.image ||
           image?.preview ||
           (image?.imageBase64
             ? `data:image/jpeg;base64,${image.imageBase64}`
@@ -410,20 +615,146 @@ const ProductPage = () => {
     return "https://via.placeholder.com/500";
   };
 
-  const handleSlide = (direction) => {
-    if (!product) return;
-    const images = getProductImages(product);
-    if (!images.length) return;
+  const getVariantImage = (variant) => {
+    return getVariantImages(variant)[0]?.imageUrl || "";
+  };
 
-    setCurrentImageIndex((prev) => {
-      const total = images.length;
-      return (prev + direction + total) % total;
-    });
+  const getVariantImages = (variant) => {
+    if (!variant) return [];
+    const listFields = ["images", "imageUrls", "variantImages"];
+    const rawImages = listFields.flatMap((field) =>
+      Array.isArray(variant[field]) ? variant[field] : [],
+    );
+    const directImage =
+      variant.image && typeof variant.image === "object"
+        ? variant.image
+        : {
+            imageUrl:
+              variant.imageUrl ||
+              variant.variantImageUrl ||
+              (typeof variant.image === "string" ? variant.image : ""),
+            imageBase64: variant.imageBase64,
+          };
+    if (
+      (variant.image && typeof variant.image === "object") ||
+      directImage.imageUrl ||
+      directImage.imageBase64
+    ) {
+      rawImages.unshift(directImage);
+    }
+    return rawImages
+      .map((image, index) => {
+        const rawUrl =
+          typeof image === "string"
+            ? image
+            : image?.imageUrl ||
+              image?.variantImageUrl ||
+              image?.url ||
+              image?.image ||
+              image?.preview ||
+              (image?.imageBase64
+                ? `data:image/jpeg;base64,${image.imageBase64}`
+                : "");
+        return {
+          ...(typeof image === "object" && image ? image : {}),
+          imageUrl: rawUrl ? normalizeImageUrl(rawUrl) : "",
+          displayOrder: image?.displayOrder ?? index,
+          primaryImage:
+            image?.primaryImage === true || image?.isPrimary === true,
+        };
+      })
+      .filter((image) => Boolean(image.imageUrl))
+      .sort((a, b) => {
+        if (a.primaryImage !== b.primaryImage) {
+          return a.primaryImage ? -1 : 1;
+        }
+        return a.displayOrder - b.displayOrder;
+      })
+      .filter(
+        (image, index, images) =>
+          images.findIndex(
+            (candidate) => candidate.imageUrl === image.imageUrl,
+          ) === index,
+      );
   };
 
   const productImages = getProductImages(product);
-  const selectedProductImage =
-    productImages[currentImageIndex] || productImages[0] || null;
+  const productVariants = Array.isArray(product?.variants)
+    ? product.variants
+    : [];
+  const variantAttributeKeys = [
+    ...new Set(
+      productVariants.flatMap((variant) =>
+        getVariantAttributes(variant).map(([key]) => key),
+      ),
+    ),
+  ].sort((a, b) => {
+    const preferredOrder = ["color", "size", "material", "pattern", "gender"];
+    const aOrder = preferredOrder.indexOf(a.toLowerCase());
+    const bOrder = preferredOrder.indexOf(b.toLowerCase());
+    if (aOrder >= 0 || bOrder >= 0) {
+      return (
+        (aOrder < 0 ? preferredOrder.length : aOrder) -
+        (bOrder < 0 ? preferredOrder.length : bOrder)
+      );
+    }
+    return a.localeCompare(b);
+  });
+  const matchingVariants = productVariants.filter((variant) =>
+    Object.entries(selectedVariantOptions).every(
+      ([key, value]) => String(variant[key]) === String(value),
+    ),
+  );
+  const selectedVariant =
+    variantAttributeKeys.length > 0 &&
+    variantAttributeKeys.every(
+      (key) =>
+        selectedVariantOptions[key] !== undefined &&
+        selectedVariantOptions[key] !== null &&
+        selectedVariantOptions[key] !== "",
+    )
+      ? matchingVariants[0]
+      : null;
+  const selectedImageOptions = Object.entries(selectedVariantOptions).filter(
+    ([key]) =>
+      ["color", "material"].includes(key.replace(/[_\s-]/g, "").toLowerCase()),
+  );
+  const imageMatchingVariants = productVariants.filter((variant) =>
+    selectedImageOptions.every(
+      ([key, value]) =>
+        String(variant[key]).toLowerCase() === String(value).toLowerCase(),
+    ),
+  );
+  const previewVariant = selectedImageOptions.length
+    ? imageMatchingVariants.find(
+        (variant) => getVariantImages(variant).length > 0,
+      ) || null
+    : null;
+  const variantImages = getVariantImages(previewVariant);
+  const galleryImages = variantImages.length ? variantImages : productImages;
+  const activeGalleryImage =
+    galleryImages[currentImageIndex] || galleryImages[0] || null;
+  const selectedVariantImage = activeGalleryImage?.imageUrl || "";
+
+  const selectVariantOption = (attribute, value) => {
+    setCurrentImageIndex(0);
+    setSelectedVariantOptions((previous) => {
+      const next = { ...previous, [attribute]: value };
+      while (
+        !productVariants.some((variant) =>
+          Object.entries(next).every(
+            ([key, selectedValue]) =>
+              String(variant[key]) === String(selectedValue),
+          ),
+        )
+      ) {
+        const removableKey = Object.keys(next).find((key) => key !== attribute);
+        if (!removableKey) break;
+        delete next[removableKey];
+      }
+      return next;
+    });
+  };
 
   const handleImageModalOpen = (index) => {
     setCurrentImageIndex(index);
@@ -431,15 +762,26 @@ const ProductPage = () => {
   };
 
   const handlePrevImage = () => {
+    if (galleryImages.length < 2) return;
     setCurrentImageIndex((prev) =>
-      prev === 0 ? productImages.length - 1 : prev - 1,
+      prev === 0 ? galleryImages.length - 1 : prev - 1,
     );
   };
 
   const handleNextImage = () => {
+    if (galleryImages.length < 2) return;
     setCurrentImageIndex((prev) =>
-      prev === productImages.length - 1 ? 0 : prev + 1,
+      prev === galleryImages.length - 1 ? 0 : prev + 1,
     );
+  };
+
+  const handleImageTouchEnd = (event) => {
+    if (imageTouchStartX.current === null) return;
+    const delta = event.changedTouches[0].clientX - imageTouchStartX.current;
+    imageTouchStartX.current = null;
+    if (Math.abs(delta) < 40) return;
+    if (delta < 0) handleNextImage();
+    else handlePrevImage();
   };
 
   if (!product) {
@@ -494,9 +836,49 @@ const ProductPage = () => {
   const averageRating = calculateAverageRating();
 
   return (
-    <Container maxWidth="lg" sx={{ py: { xs: 1, md: 2 } }}>
+    <Container
+      maxWidth="lg"
+      sx={{
+        py: { xs: 1, md: 2 },
+        px: { xs: 1, sm: 2 },
+        "& .MuiTypography-h4": {
+          fontSize: "clamp(1.2rem, 2.5vw, 1.7rem)",
+          lineHeight: 1.25,
+        },
+        "& .MuiTypography-h6": {
+          fontSize: "clamp(1rem, 1.8vw, 1.25rem)",
+        },
+        "& .MuiTypography-subtitle1": {
+          fontSize: "clamp(0.9rem, 1.5vw, 1rem)",
+        },
+        "& .MuiTypography-subtitle2": {
+          fontSize: "clamp(0.8rem, 1.2vw, 0.9rem)",
+        },
+        "& .MuiTypography-body1": {
+          fontSize: "clamp(0.85rem, 1.3vw, 0.95rem)",
+        },
+        "& .MuiTypography-body2": {
+          fontSize: "clamp(0.78rem, 1.15vw, 0.9rem)",
+        },
+        "& .MuiTypography-caption": {
+          fontSize: "clamp(0.7rem, 1vw, 0.75rem)",
+        },
+        "& .MuiButton-root": {
+          fontSize: "clamp(0.74rem, 1vw, 0.84rem)",
+          minHeight: { xs: 34, sm: 36 },
+          borderRadius: 1.75,
+          fontWeight: 600,
+          px: { xs: 1.25, sm: 1.5 },
+          textTransform: "none",
+        },
+      }}
+    >
       {/* Product Section */}
-      <Grid container spacing={{ xs: 2, md: 3 }} alignItems="flex-start">
+      <Grid
+        container
+        spacing={{ xs: 1.5, sm: 2, md: 3 }}
+        alignItems="flex-start"
+      >
         {/* Image */}
         <Grid item xs={12} md={6}>
           <Box
@@ -504,9 +886,14 @@ const ProductPage = () => {
             sx={{
               position: "relative",
               width: "100%",
-              minWidth: { xs: 220, sm: 260, md: 320 },
-              maxWidth: { xs: "100%", md: 560 },
-              height: { xs: 290, sm: 360, md: 420 },
+              minWidth: 0,
+              width: { xs: "min(100%, 440px)", md: "min(100%, 560px)" },
+              maxWidth: "100%",
+              aspectRatio: "1 / 1",
+              height: "auto",
+              flex: "0 0 auto",
+              alignSelf: "flex-start",
+              boxSizing: "border-box",
               mx: "auto",
               display: "flex",
               alignItems: "center",
@@ -517,9 +904,14 @@ const ProductPage = () => {
               cursor: "pointer",
               overflow: "hidden",
               boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+              touchAction: "pan-y",
             }}
+            onTouchStart={(event) => {
+              imageTouchStartX.current = event.touches[0].clientX;
+            }}
+            onTouchEnd={handleImageTouchEnd}
           >
-            {productImages.length > 1 && (
+            {galleryImages.length > 1 && (
               <>
                 <IconButton
                   onClick={(event) => {
@@ -559,7 +951,7 @@ const ProductPage = () => {
             )}
 
             <img
-              src={selectedProductImage?.imageUrl || getDisplayImage(product)}
+              src={selectedVariantImage || getDisplayImage(product)}
               alt={product.name}
               style={{
                 width: "100%",
@@ -570,23 +962,25 @@ const ProductPage = () => {
             />
           </Box>
 
-          {productImages.length > 1 && (
+          {galleryImages.length > 1 && (
             <Box
               sx={{
                 display: "flex",
-                justifyContent: "center",
+                justifyContent: { xs: "flex-start", sm: "center" },
                 gap: 1,
                 mt: 1,
-                flexWrap: "wrap",
+                flexWrap: "nowrap",
+                overflowX: "auto",
+                py: 0.25,
               }}
             >
-              {productImages.map((image, index) => (
+              {galleryImages.map((image, index) => (
                 <Box
                   key={index}
                   onClick={() => setCurrentImageIndex(index)}
                   sx={{
-                    width: { xs: 52, sm: 58 },
-                    height: { xs: 52, sm: 58 },
+                    width: { xs: 48, sm: 58 },
+                    height: { xs: 48, sm: 58 },
                     borderRadius: 1,
                     overflow: "hidden",
                     cursor: "pointer",
@@ -634,11 +1028,90 @@ const ProductPage = () => {
               sx={{
                 mb: 1.5,
                 lineHeight: 1.6,
-                fontSize: { xs: "0.82rem", md: "0.95rem" },
+                fontSize: "clamp(0.82rem, 1.2vw, 0.95rem)",
+                display: "-webkit-box",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 3,
+                overflow: "hidden",
               }}
             >
-              {product.description}
+              {product.description || "Explore product options and details."}
             </Typography>
+
+            {productVariants.length > 0 && (
+              <Box sx={{ mb: 1.5 }}>
+                {variantAttributeKeys.map((attribute) => {
+                  const availableOptions = [
+                    ...new Set(
+                      productVariants
+                        .filter((variant) =>
+                          Object.entries(selectedVariantOptions).every(
+                            ([key, value]) =>
+                              key === attribute ||
+                              String(variant[key]) === String(value),
+                          ),
+                        )
+                        .map((variant) => variant[attribute])
+                        .filter(
+                          (value) =>
+                            value !== null &&
+                            value !== undefined &&
+                            String(value).trim() !== "",
+                        )
+                        .map(String),
+                    ),
+                  ];
+                  return (
+                    <Box key={attribute} sx={{ mb: 1 }}>
+                      <Typography
+                        variant="body2"
+                        fontWeight={700}
+                        sx={{ mb: 0.5 }}
+                      >
+                        Select {formatVariantAttribute(attribute).toLowerCase()}
+                      </Typography>
+                      <Box display="flex" flexWrap="wrap" gap={0.75}>
+                        {availableOptions.map((value) => (
+                          <Button
+                            key={value}
+                            size="small"
+                            variant={
+                              String(selectedVariantOptions[attribute]) ===
+                              value
+                                ? "contained"
+                                : "outlined"
+                            }
+                            onClick={() =>
+                              selectVariantOption(attribute, value)
+                            }
+                          >
+                            {value}
+                          </Button>
+                        ))}
+                      </Box>
+                    </Box>
+                  );
+                })}
+                {selectedVariant && (
+                  <Typography
+                    variant="caption"
+                    color={
+                      selectedVariant.stock != null &&
+                      Number(selectedVariant.stock) <= 0
+                        ? "error"
+                        : "text.secondary"
+                    }
+                    sx={{ display: "block", mt: 0.75 }}
+                  >
+                    {selectedVariant.stock != null
+                      ? Number(selectedVariant.stock) <= 0
+                        ? "Out of stock"
+                        : `${selectedVariant.stock} in stock`
+                      : ""}
+                  </Typography>
+                )}
+              </Box>
+            )}
 
             <Box
               display="flex"
@@ -666,7 +1139,7 @@ const ProductPage = () => {
                   lineHeight: 1.2,
                 }}
               >
-                ₹{product.price}
+                ₹{selectedVariant?.price ?? product.price}
               </Typography>
             </Box>
 
@@ -675,10 +1148,20 @@ const ProductPage = () => {
                 variant="contained"
                 size="small"
                 onClick={handleAddToCart}
+                disabled={
+                  (productVariants.length > 0 && !selectedVariant) ||
+                  (selectedVariant?.stock != null &&
+                    Number(selectedVariant.stock) <= 0) ||
+                  (productVariants.length === 0 &&
+                    product.quantityInStock != null &&
+                    Number(product.quantityInStock) <= 0)
+                }
                 sx={{
-                  px: { xs: 2.5, md: 4 },
-                  py: { xs: 0.8, md: 1.2 },
-                  fontSize: { xs: "0.8rem", md: "1rem" },
+                  px: { xs: 1.75, sm: 2.25 },
+                  py: 0.6,
+                  minHeight: { xs: 40, sm: 42 },
+                  fontSize: "clamp(0.82rem, 1vw, 0.92rem)",
+                  fontWeight: 700,
                   flex: { xs: 1, sm: "unset" },
                 }}
               >
@@ -689,9 +1172,11 @@ const ProductPage = () => {
                 size="small"
                 onClick={() => navigate("/cart")}
                 sx={{
-                  px: { xs: 2, md: 3 },
-                  py: { xs: 0.8, md: 1.2 },
-                  fontSize: { xs: "0.8rem", md: "1rem" },
+                  px: { xs: 1.5, sm: 2 },
+                  py: 0.6,
+                  minHeight: { xs: 40, sm: 42 },
+                  fontSize: "clamp(0.82rem, 1vw, 0.92rem)",
+                  fontWeight: 650,
                   flex: { xs: 1, sm: "unset" },
                 }}
               >
@@ -703,20 +1188,175 @@ const ProductPage = () => {
       </Grid>
 
       {/* ==================== PRODUCT DETAILS SECTION ==================== */}
-      <Divider sx={{ my: { xs: 1, md: 2 } }} />
-
-      <Typography variant="subtitle1" fontWeight={600} gutterBottom>
-        Product Details
-      </Typography>
-
-      <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
-        <Typography variant="body2">
-          <strong>Brand:</strong> {product.brand || "N/A"}
-        </Typography>
-        <Typography variant="body2">
-          <strong>SKU:</strong> {product.sku || "N/A"}
-        </Typography>
+      <Box
+        sx={{
+          mt: { xs: 1.5, sm: 2 },
+          p: { xs: 1.25, sm: 1.75 },
+          border: "1px solid",
+          borderColor: "divider",
+          borderRadius: 2.5,
+          bgcolor: "#fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 1.5,
+        }}
+      >
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="subtitle2" fontWeight={750}>
+            Product details
+          </Typography>
+          <Typography variant="body2" color="text.secondary" noWrap>
+            Brand, SKU, description and more
+          </Typography>
+        </Box>
+        <Button
+          variant="outlined"
+          size="small"
+          onClick={() => setProductDetailsDrawerOpen(true)}
+          sx={{ flexShrink: 0, px: { xs: 1.25, sm: 2 } }}
+        >
+          View details
+        </Button>
       </Box>
+
+      <Drawer
+        anchor="right"
+        open={productDetailsDrawerOpen}
+        onClose={() => setProductDetailsDrawerOpen(false)}
+        PaperProps={{
+          sx: {
+            width: { xs: "100%", sm: 440 },
+            maxWidth: "100vw",
+            display: "flex",
+            flexDirection: "column",
+          },
+        }}
+      >
+        <Box
+          sx={{
+            px: { xs: 2, sm: 2.5 },
+            py: 2,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 1,
+            borderBottom: "1px solid",
+            borderColor: "divider",
+          }}
+        >
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="h6" fontWeight={750}>
+              Product details
+            </Typography>
+            <Typography variant="body2" color="text.secondary" noWrap>
+              {product.name}
+            </Typography>
+          </Box>
+          <IconButton
+            aria-label="Close product details"
+            onClick={() => setProductDetailsDrawerOpen(false)}
+          >
+            <CloseIcon />
+          </IconButton>
+        </Box>
+        <Box
+          sx={{
+            p: { xs: 2, sm: 2.5 },
+            flex: 1,
+            overflowY: "auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+          }}
+        >
+          <Box>
+            <Typography variant="subtitle2" fontWeight={750} sx={{ mb: 0.5 }}>
+              Description
+            </Typography>
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{
+                lineHeight: 1.7,
+                whiteSpace: "pre-wrap",
+                overflowWrap: "anywhere",
+              }}
+            >
+              {product.description || "No description available."}
+            </Typography>
+          </Box>
+          <Divider />
+          <Box sx={{ display: "grid", gap: 1.5 }}>
+            {[
+              ["Brand", product.brand],
+              ["SKU", product.sku],
+              ["Category", product.categoryName || product.category?.name],
+              [
+                "Availability",
+                selectedVariant?.stock != null
+                  ? Number(selectedVariant.stock) > 0
+                    ? `${selectedVariant.stock} in stock`
+                    : "Out of stock"
+                  : product.quantityInStock != null
+                    ? Number(product.quantityInStock) > 0
+                      ? `${product.quantityInStock} in stock`
+                      : "Out of stock"
+                    : null,
+              ],
+              [
+                "Selected options",
+                selectedVariant
+                  ? variantAttributeKeys
+                      .map(
+                        (key) =>
+                          `${formatVariantAttribute(key)}: ${selectedVariant[key]}`,
+                      )
+                      .join(" · ")
+                  : null,
+              ],
+            ]
+              .filter(([, value]) => value)
+              .map(([label, value]) => (
+                <Box
+                  key={label}
+                  sx={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 2,
+                  }}
+                >
+                  <Typography variant="body2" color="text.secondary">
+                    {label}
+                  </Typography>
+                  <Typography
+                    variant="body2"
+                    fontWeight={650}
+                    textAlign="right"
+                    sx={{ overflowWrap: "anywhere" }}
+                  >
+                    {value}
+                  </Typography>
+                </Box>
+              ))}
+          </Box>
+        </Box>
+        <Box
+          sx={{
+            p: { xs: 1.5, sm: 2 },
+            borderTop: "1px solid",
+            borderColor: "divider",
+          }}
+        >
+          <Button
+            fullWidth
+            variant="contained"
+            onClick={() => setProductDetailsDrawerOpen(false)}
+          >
+            Done
+          </Button>
+        </Box>
+      </Drawer>
 
       <Divider sx={{ my: { xs: 1, md: 2 } }} />
 
@@ -1176,10 +1816,12 @@ const ProductPage = () => {
             transform: "translate(-50%, -50%)",
             bgcolor: "background.paper",
             boxShadow: 24,
-            p: 1,
-            maxWidth: "92vw",
-            maxHeight: "85vh",
+            p: { xs: 0.75, sm: 1.5 },
+            width: { xs: "96vw", sm: "auto" },
+            maxWidth: "96vw",
+            maxHeight: "94vh",
             borderRadius: 2,
+            overflow: "auto",
           }}
         >
           <IconButton
@@ -1190,10 +1832,23 @@ const ProductPage = () => {
           </IconButton>
 
           {/* Image Slider */}
-          <Box>
+          <Box
+            sx={{
+              position: "relative",
+              width: { xs: "100%", sm: "min(82vw, 900px)" },
+              height: { xs: "min(68vh, 520px)", sm: "min(76vh, 760px)" },
+              display: "grid",
+              placeItems: "center",
+              touchAction: "pan-y",
+            }}
+            onTouchStart={(event) => {
+              imageTouchStartX.current = event.touches[0].clientX;
+            }}
+            onTouchEnd={handleImageTouchEnd}
+          >
             <IconButton
               onClick={handlePrevImage}
-              disabled={productImages.length <= 1}
+              disabled={galleryImages.length <= 1}
               sx={{
                 position: "absolute",
                 top: "50%",
@@ -1207,18 +1862,19 @@ const ProductPage = () => {
             </IconButton>
 
             <img
-              src={selectedProductImage?.imageUrl || getDisplayImage(product)}
+              src={activeGalleryImage?.imageUrl || getDisplayImage(product)}
               alt={product.name}
               style={{
-                maxWidth: "100%",
-                maxHeight: "80vh",
+                width: "100%",
+                height: "100%",
                 objectFit: "contain",
+                padding: "8px 36px",
               }}
             />
 
             <IconButton
               onClick={handleNextImage}
-              disabled={productImages.length <= 1}
+              disabled={galleryImages.length <= 1}
               sx={{
                 position: "absolute",
                 top: "50%",
@@ -1233,23 +1889,27 @@ const ProductPage = () => {
           </Box>
 
           {/* Thumbnails */}
-          {productImages.length > 1 && (
+          {galleryImages.length > 1 && (
             <Box
               sx={{
                 display: "flex",
-                justifyContent: "center",
+                justifyContent: { xs: "flex-start", sm: "center" },
                 gap: 1,
                 mt: 1,
-                flexWrap: "wrap",
+                flexWrap: "nowrap",
+                overflowX: "auto",
+                maxWidth: "100%",
+                pb: 0.5,
               }}
             >
-              {productImages.map((image, index) => (
+              {galleryImages.map((image, index) => (
                 <Box
                   key={index}
                   onClick={() => setCurrentImageIndex(index)}
                   sx={{
-                    width: 60,
-                    height: 60,
+                    width: { xs: 48, sm: 60 },
+                    height: { xs: 48, sm: 60 },
+                    flex: "0 0 auto",
                     cursor: "pointer",
                     borderRadius: 1,
                     overflow: "hidden",

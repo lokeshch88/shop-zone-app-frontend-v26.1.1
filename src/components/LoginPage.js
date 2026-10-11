@@ -40,6 +40,19 @@ const LoginPage = () => {
         const userRole = response.data.userRole;
         const userAddress = response.data.addresses;
         const merchantId = response.data.merchantId;
+        const merchant = response.data.merchant || {};
+        const merchantSlug =
+          response.data.merchantSlug ||
+          response.data.storeSlug ||
+          merchant.storeSlug ||
+          merchant.slug ||
+          slug;
+        const merchantName =
+          response.data.merchantName ||
+          merchant.businessName ||
+          merchant.storeName ||
+          merchant.name ||
+          merchantSlug;
         localStorage.setItem("authToken", token);
         // localStorage.setItem("userInfo", JSON.stringify(userInfo));
         // After successful login:
@@ -56,6 +69,8 @@ const LoginPage = () => {
         localStorage.setItem("userId", userId);
         localStorage.setItem("userRole", userRole);
         localStorage.setItem("merchantId", merchantId);
+        localStorage.setItem("merchantSlug", merchantSlug);
+        localStorage.setItem("merchantName", merchantName);
         if (userRole === "ADMIN") {
           window.location.href = `/store/${slug}/admin-dashboard`;
         } else if (userRole === "Delivery User") {

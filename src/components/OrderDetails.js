@@ -8,6 +8,7 @@ import {
   Chip,
   List,
   ListItem,
+  ListItemButton,
   ListItemText,
   Button,
   Stepper,
@@ -34,7 +35,7 @@ const ORDER_FLOW = [
 const MOBILE_ORDER_LABELS = ["Placed", "Confirm", "Shipped", "Out", "Done"];
 
 const OrderDetails = () => {
-  const { orderId } = useParams();
+  const { orderId, slug } = useParams();
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -106,7 +107,7 @@ const OrderDetails = () => {
 
   const renderAddressBlock = () => (
     <Box sx={{ display: "grid", gap: 1.5 }}>
-      <Typography
+      {/* <Typography
         variant="subtitle2"
         color="text.secondary"
         sx={{
@@ -115,7 +116,7 @@ const OrderDetails = () => {
         }}
       >
         Delivery location
-      </Typography>
+      </Typography> */}
       <Box
         sx={{
           background: "linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%)",
@@ -132,7 +133,7 @@ const OrderDetails = () => {
             color: "text.primary",
           }}
         >
-          {order.deliveryAddress?.name || "Customer"}
+          {order.deliveryAddress?.name || "Customer Name"}
           <br />
           {order.deliveryAddress?.addressLine || "-"},
           <br />
@@ -153,23 +154,29 @@ const OrderDetails = () => {
           {order.items.map((item, index) => (
             <React.Fragment key={`${item.productId || index}-${index}`}>
               <ListItem
-                divider
-                disableGutters
+                disablePadding
                 sx={{
-                  display: "block",
-                  p: 1.5,
                   borderRadius: 2,
                   backgroundColor: "#f8fafc",
                   border: "1px solid #e2e8f0",
                 }}
               >
-                <Box
+                <ListItemButton
+                  disabled={!item.productId && !item.id}
+                  onClick={() => {
+                    const productId = item.productId || item.id;
+                    if (productId) {
+                      navigate(`/store/${slug}/product/${productId}`);
+                    }
+                  }}
                   sx={{
                     display: "flex",
                     justifyContent: "space-between",
                     gap: 1.5,
                     alignItems: "flex-start",
                     flexWrap: "wrap",
+                    p: 1.5,
+                    borderRadius: 2,
                   }}
                 >
                   <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -202,7 +209,7 @@ const OrderDetails = () => {
                       Number(item.price || 0) * Number(item.quantity || 1)
                     ).toFixed(2)}
                   </Typography>
-                </Box>
+                </ListItemButton>
               </ListItem>
             </React.Fragment>
           ))}
@@ -216,24 +223,28 @@ const OrderDetails = () => {
   );
 
   return (
-    <Box sx={{ maxWidth: 1200, mx: "auto", p: { xs: 1.5, sm: 2, md: 3 } }}>
+    <Box sx={{ maxWidth: 1200, mx: "auto", p: { xs: 1, sm: 1.5, md: 1.5 } }}>
       <Button
         onClick={() => navigate(-1)}
-        sx={{ mb: 2, textTransform: "none", fontWeight: 600, px: 0 }}
+        sx={{ mb: 0, textTransform: "none", fontWeight: 600, px: 0 }}
       >
         ← Back to Orders
       </Button>
 
-      <Grid container spacing={2.5} sx={{ alignItems: "stretch" }}>
-        <Grid item xs={12}>
+      <Grid
+        container
+        spacing={{ xs: 1.25, sm: 2 }}
+        sx={{ alignItems: "stretch" }}
+      >
+        <Grid size={12}>
           <Card
             sx={{
-              borderRadius: 4,
-              boxShadow: "0 12px 30px rgba(15,23,42,0.06)",
+              borderRadius: 2.5,
+              boxShadow: "0 5px 18px rgba(15,23,42,0.05)",
               border: "1px solid rgba(148, 163, 184, 0.16)",
             }}
           >
-            <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
+            <CardContent sx={{ p: { xs: 1.5, sm: 2.25 } }}>
               <Box
                 sx={{
                   display: "flex",
@@ -277,37 +288,41 @@ const OrderDetails = () => {
               <Box
                 sx={{
                   display: "grid",
-                  gridTemplateColumns: {
-                    xs: "1fr",
-                    sm: "repeat(3, minmax(0, 1fr))",
-                  },
-                  gap: 2,
-                  mt: 0.5,
+                  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                  gap: { xs: 0.75, sm: 1.25 },
+                  mt: 1,
                 }}
               >
                 <Box
                   sx={{
                     background:
                       "linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%)",
-                    borderRadius: 3,
-                    p: 2,
-                    height: "100%",
+                    borderRadius: 1.5,
+                    p: { xs: 1, sm: 1.5 },
                     border: "1px solid #e2e8f0",
-                    display: "flex",
-                    flexDirection: "column",
-                    justifyContent: "space-between",
                     minWidth: 0,
                   }}
                 >
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ fontSize: { xs: "0.62rem", sm: "0.75rem" } }}
+                  >
                     Placed on
                   </Typography>
                   <Typography
-                    variant="subtitle1"
+                    variant="body1"
                     fontWeight={700}
-                    sx={{ mt: 0.5, wordBreak: "break-word" }}
+                    sx={{
+                      mt: 0.25,
+                      fontSize: { xs: "0.75rem", sm: "1rem" },
+                      lineHeight: 1.25,
+                    }}
                   >
-                    {new Date(order.createdAt).toLocaleDateString()}
+                    {new Date(order.createdAt).toLocaleDateString(
+                      undefined,
+                      isMobile ? { month: "short", day: "numeric" } : undefined,
+                    )}
                   </Typography>
                 </Box>
 
@@ -315,23 +330,28 @@ const OrderDetails = () => {
                   sx={{
                     background:
                       "linear-gradient(135deg, #f8fafc 0%, #ecfeff 100%)",
-                    borderRadius: 3,
-                    p: 2,
-                    height: "100%",
+                    borderRadius: 1.5,
+                    p: { xs: 1, sm: 1.5 },
                     border: "1px solid #e2e8f0",
-                    display: "flex",
-                    flexDirection: "column",
-                    justifyContent: "space-between",
                     minWidth: 0,
                   }}
                 >
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ fontSize: { xs: "0.62rem", sm: "0.75rem" } }}
+                  >
                     Total
                   </Typography>
                   <Typography
-                    variant="subtitle1"
+                    variant="body1"
                     fontWeight={700}
-                    sx={{ mt: 0.5, wordBreak: "break-word" }}
+                    sx={{
+                      mt: 0.25,
+                      fontSize: { xs: "0.75rem", sm: "1rem" },
+                      lineHeight: 1.25,
+                      overflowWrap: "anywhere",
+                    }}
                   >
                     ₹{Number(order.totalAmount || 0).toFixed(2)}
                   </Typography>
@@ -341,23 +361,28 @@ const OrderDetails = () => {
                   sx={{
                     background:
                       "linear-gradient(135deg, #f8fafc 0%, #fefce8 100%)",
-                    borderRadius: 3,
-                    p: 2,
-                    height: "100%",
+                    borderRadius: 1.5,
+                    p: { xs: 1, sm: 1.5 },
                     border: "1px solid #e2e8f0",
-                    display: "flex",
-                    flexDirection: "column",
-                    justifyContent: "space-between",
                     minWidth: 0,
                   }}
                 >
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ fontSize: { xs: "0.62rem", sm: "0.75rem" } }}
+                  >
                     Items
                   </Typography>
                   <Typography
-                    variant="subtitle1"
+                    variant="body1"
                     fontWeight={700}
-                    sx={{ mt: 0.5, wordBreak: "break-word" }}
+                    sx={{
+                      mt: 0.25,
+                      fontSize: { xs: "0.75rem", sm: "1rem" },
+                      lineHeight: 1.25,
+                      overflowWrap: "anywhere",
+                    }}
                   >
                     {order.items?.length || 0} products
                   </Typography>
@@ -367,52 +392,62 @@ const OrderDetails = () => {
           </Card>
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Card
             sx={{
-              borderRadius: 4,
-              boxShadow: "0 12px 30px rgba(15,23,42,0.06)",
+              borderRadius: 2.5,
+              boxShadow: "0 5px 18px rgba(15,23,42,0.05)",
               border: "1px solid rgba(148, 163, 184, 0.16)",
             }}
           >
-            <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
-              <Typography variant="h6" gutterBottom fontWeight={700}>
+            <CardContent sx={{ p: { xs: 1.5, sm: 2.25 } }}>
+              <Typography variant="h6" sx={{ mb: 1 }} fontWeight={700}>
                 Delivery Status
               </Typography>
 
               <Stepper
                 activeStep={currentStep >= 0 ? currentStep : 0}
-                alternativeLabel={!isMobile}
-                orientation={isMobile ? "horizontal" : "horizontal"}
+                alternativeLabel
+                orientation="horizontal"
                 sx={{
-                  mt: 2,
-                  overflowX: "auto",
+                  mt: 0.5,
                   width: "100%",
                   minWidth: 0,
                   "& .MuiStepLabel-root": {
+                    display: "flex",
                     flexDirection: "column",
                     alignItems: "center",
-                    minWidth: isMobile ? 48 : "auto",
+                    minWidth: 0,
+                  },
+                  "& .MuiStepLabel-labelContainer": {
+                    width: "100%",
+                    minWidth: 0,
                   },
                   "& .MuiStepLabel-label": {
-                    fontSize: isMobile ? "0.56rem" : "0.82rem",
+                    mt: 0.5,
+                    mx: 0,
+                    fontSize: isMobile ? "0.62rem" : "0.78rem",
                     fontWeight: 700,
                     lineHeight: 1.2,
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    maxWidth: isMobile ? 52 : "none",
+                    textAlign: "center",
+                    whiteSpace: "normal",
+                    overflowWrap: "anywhere",
+                    maxWidth: isMobile ? 58 : 110,
                   },
                   "& .MuiStepLabel-iconContainer": {
                     paddingRight: 0,
                   },
+                  "& .MuiStepIcon-root": {
+                    fontSize: isMobile ? 20 : 24,
+                  },
                   "& .MuiStepConnector-line": {
                     borderColor: "#cbd5e1",
-                    borderTopWidth: isMobile ? 2 : 1,
+                    borderTopWidth: 2,
                   },
                   "& .MuiStep-root": {
-                    px: isMobile ? 0.25 : 1,
-                    minWidth: isMobile ? 48 : "auto",
+                    px: { xs: 0, sm: 0.5 },
+                    minWidth: 0,
+                    flex: 1,
                   },
                 }}
               >
@@ -433,7 +468,8 @@ const OrderDetails = () => {
           </Card>
         </Grid>
 
-        <Grid item xs={12}>
+        {/* grid section of address items button to open side navbar */}
+        {/* <Grid size={12}>
           <Box
             sx={{
               display: "flex",
@@ -468,19 +504,19 @@ const OrderDetails = () => {
               View Items
             </Button>
           </Box>
-        </Grid>
+        </Grid> */}
 
-        <Grid item xs={12} md={5} sx={{ minWidth: 0 }}>
+        <Grid size={{ xs: 12, md: 5 }} sx={{ minWidth: 0 }}>
           <Card
             sx={{
-              borderRadius: 4,
+              borderRadius: 2.5,
               height: "100%",
-              boxShadow: "0 12px 30px rgba(15,23,42,0.06)",
+              boxShadow: "0 5px 18px rgba(15,23,42,0.05)",
               border: "1px solid rgba(148, 163, 184, 0.16)",
             }}
           >
-            <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
-              <Typography variant="h6" gutterBottom fontWeight={700}>
+            <CardContent sx={{ p: { xs: 1.5, sm: 2.25 } }}>
+              <Typography variant="h6" sx={{ mb: 1 }} fontWeight={700}>
                 Shipping Address
               </Typography>
               {renderAddressBlock()}
@@ -488,17 +524,17 @@ const OrderDetails = () => {
           </Card>
         </Grid>
 
-        <Grid item xs={12} md={7} sx={{ minWidth: 0 }}>
+        <Grid size={{ xs: 12, md: 7 }} sx={{ minWidth: 0 }}>
           <Card
             sx={{
-              borderRadius: 4,
+              borderRadius: 2.5,
               height: "100%",
-              boxShadow: "0 12px 30px rgba(15,23,42,0.06)",
+              boxShadow: "0 5px 18px rgba(15,23,42,0.05)",
               border: "1px solid rgba(148, 163, 184, 0.16)",
             }}
           >
-            <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
-              <Typography variant="h6" gutterBottom fontWeight={700}>
+            <CardContent sx={{ p: { xs: 1.5, sm: 2.25 } }}>
+              <Typography variant="h6" sx={{ mb: 1 }} fontWeight={700}>
                 Order Items
               </Typography>
               {renderItemsPanel()}

@@ -17,9 +17,15 @@ import {
   useMediaQuery,
   Box,
   Badge,
+  Drawer,
+  List,
+  ListItemButton,
+  ListItemText,
+  Divider,
 } from "@mui/material";
 
 import MenuIcon from "@mui/icons-material/Menu";
+import CloseIcon from "@mui/icons-material/Close";
 import LocationOnIcon from "@mui/icons-material/LocationOn";
 import ShoppingCartOutlinedIcon from "@mui/icons-material/ShoppingCartOutlined";
 
@@ -43,6 +49,7 @@ const NavBar = () => {
   const [addressList, setAddressList] = useState([]);
   const [detectedAddress, setDetectedAddress] = useState(null);
   const [cartCount, setCartCount] = useState(0);
+  const [merchantDetails, setMerchantDetails] = useState(null);
 
   const isLoggedIn = !!localStorage.getItem("authToken");
 
@@ -74,6 +81,54 @@ const NavBar = () => {
   };
 
   const slug = getMerchantSlug();
+
+  useEffect(() => {
+    let active = true;
+
+    if (!slug) {
+      setMerchantDetails(null);
+      return () => {
+        active = false;
+      };
+    }
+
+    setMerchantDetails(null);
+    const loadMerchantBranding = async () => {
+      try {
+        let response;
+        try {
+          response = await axios.get("/api/merchants/by-slug/");
+        } catch {
+          response = await axios.get("/api/merchants/by-slug");
+        }
+
+        const merchant =
+          response.data?.result || response.data?.data || response.data;
+        if (active && merchant && !Array.isArray(merchant)) {
+          setMerchantDetails(merchant);
+          localStorage.setItem(
+            "merchantName",
+            merchant.businessName ||
+              merchant.storeName ||
+              merchant.shopName ||
+              slug,
+          );
+          localStorage.setItem(
+            "merchantSlug",
+            merchant.storeSlug || merchant.slug || slug,
+          );
+        }
+      } catch (error) {
+        if (active) setMerchantDetails(null);
+        console.warn("Could not load store branding:", error);
+      }
+    };
+
+    loadMerchantBranding();
+    return () => {
+      active = false;
+    };
+  }, [slug]);
 
   console.log("Current URL:", location.pathname);
   console.log("Current merchant slug:", slug);
@@ -347,17 +402,31 @@ const NavBar = () => {
     },
   ];
 
+  const superAdminNav = [
+    {
+      label: "Shopora Control",
+      path: "/shopora-control",
+    },
+  ];
+
   // ============================================================
   // SELECT NAVIGATION
   // ============================================================
 
+  const normalizedRole = String(role || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+
   const navItems = !isLoggedIn
     ? publicNav
-    : role === "ADMIN"
-      ? adminNav
-      : role === "Delivery User"
-        ? deliveryBoyNav
-        : userNav;
+    : ["SUPER_ADMIN", "SUPERADMIN"].includes(normalizedRole)
+      ? superAdminNav
+      : role === "ADMIN"
+        ? adminNav
+        : role === "Delivery User"
+          ? deliveryBoyNav
+          : userNav;
 
   // ============================================================
   // LOGO CLICK
@@ -383,6 +452,30 @@ const NavBar = () => {
 
   const profilePath = slug ? `/store/${slug}/profile` : "/";
 
+  const brandName = slug
+    ? merchantDetails?.businessName ||
+      merchantDetails?.storeName ||
+      merchantDetails?.shopName ||
+      (localStorage.getItem("merchantSlug") === slug
+        ? localStorage.getItem("merchantName")
+        : "") ||
+      slug
+        .split("-")
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(" ")
+    : "Shopora";
+  const merchantLogo = slug
+    ? merchantDetails?.logoUrl ||
+      merchantDetails?.storeLogoUrl ||
+      merchantDetails?.logo ||
+      ""
+    : "";
+  const brandLogoSrc = merchantLogo
+    ? /^(https?:|data:|blob:)/i.test(merchantLogo)
+      ? merchantLogo
+      : `${(axios.defaults.baseURL || window.location.origin).replace(/\/+$/, "")}/${merchantLogo.replace(/^\/+/, "")}`
+    : "";
+
   return (
     <>
       {/* ========================================================
@@ -405,12 +498,14 @@ const NavBar = () => {
         <Toolbar
           sx={{
             justifyContent: "space-between",
+            position: "relative",
 
             px: {
               xs: 2,
               md: 4,
             },
 
+            height: 72,
             minHeight: 72,
           }}
         >
@@ -422,23 +517,75 @@ const NavBar = () => {
             sx={{
               display: "flex",
               alignItems: "center",
-              gap: 3,
+              gap: { xs: 0, md: 3 },
+              position: "static",
+              maxWidth: { xs: "calc(100% - 120px)", md: "none" },
+              minWidth: 0,
+              zIndex: 1,
             }}
           >
-            <Typography
-              variant="h6"
-              fontWeight={700}
-              sx={{
-                fontFamily: "'Inter', sans-serif",
-
-                letterSpacing: "-0.5px",
-
-                cursor: "pointer",
-              }}
+            <Box
+              role="button"
+              tabIndex={0}
+              aria-label={
+                slug ? `Go to ${brandName} store home` : "Go to Shopora home"
+              }
               onClick={handleLogoClick}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  handleLogoClick();
+                }
+              }}
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: { xs: 0.75, md: 1.25 },
+                minWidth: 0,
+                cursor: "pointer",
+                borderRadius: 1,
+                outlineOffset: 3,
+              }}
             >
-              Shopora
-            </Typography>
+              {slug && (
+                <Avatar
+                  src={brandLogoSrc}
+                  alt={`${brandName} logo`}
+                  variant="rounded"
+                  imgProps={{ style: { objectFit: "contain" } }}
+                  sx={{
+                    width: { xs: 34, md: 40 },
+                    height: { xs: 34, md: 40 },
+                    flex: "0 0 auto",
+                    bgcolor: "action.hover",
+                    color: "primary.main",
+                    fontSize: 16,
+                    fontWeight: 700,
+                  }}
+                >
+                  {brandName.charAt(0).toUpperCase()}
+                </Avatar>
+              )}
+              <Typography
+                variant="h6"
+                fontWeight={700}
+                noWrap
+                sx={{
+                  fontFamily: "'Inter', sans-serif",
+                  fontSize: { xs: "0.95rem", md: "1.25rem" },
+                  lineHeight: 1.2,
+                  minWidth: 0,
+                  maxWidth: {
+                    xs: "max(0px, min(220px, calc(100vw - 264px)))",
+                    md: 280,
+                  },
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {brandName}
+              </Typography>
+            </Box>
 
             {/* ADDRESS */}
 
@@ -555,8 +702,11 @@ const NavBar = () => {
                 sx={{
                   display: "flex",
                   alignItems: "center",
-
                   gap: 1,
+                  ml: "auto",
+                  flexShrink: 0,
+                  position: "relative",
+                  zIndex: 2,
                 }}
               >
                 {role !== "ADMIN" && (
@@ -567,37 +717,70 @@ const NavBar = () => {
                   </IconButton>
                 )}
 
-                <IconButton edge="end" color="inherit" onClick={handleMenuOpen}>
+                <IconButton
+                  edge="end"
+                  color="inherit"
+                  aria-label="Open navigation menu"
+                  onClick={handleMenuOpen}
+                >
                   <MenuIcon />
                 </IconButton>
               </Box>
 
-              <Menu
-                anchorEl={anchorEl}
+              <Drawer
+                anchor="right"
                 open={Boolean(anchorEl)}
                 onClose={handleMenuClose}
+                PaperProps={{
+                  sx: {
+                    width: "min(320px, 86vw)",
+                    pt: 1,
+                  },
+                }}
               >
-                {navItems.map((item) => (
-                  <MenuItem
-                    key={item.label}
-                    component={Link}
-                    to={item.path}
+                <Box
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    px: 2,
+                    py: 1,
+                  }}
+                >
+                  <Typography variant="subtitle1" fontWeight={700} noWrap>
+                    {brandName}
+                  </Typography>
+                  <IconButton
+                    aria-label="Close navigation menu"
                     onClick={handleMenuClose}
                   >
-                    {item.label}
-                  </MenuItem>
-                ))}
+                    <CloseIcon />
+                  </IconButton>
+                </Box>
+                <Divider />
+                <List>
+                  {navItems.map((item) => (
+                    <ListItemButton
+                      key={item.label}
+                      component={Link}
+                      to={item.path}
+                      onClick={handleMenuClose}
+                    >
+                      <ListItemText primary={item.label} />
+                    </ListItemButton>
+                  ))}
 
-                {isLoggedIn && (
-                  <MenuItem
-                    component={Link}
-                    to={profilePath}
-                    onClick={handleMenuClose}
-                  >
-                    Profile
-                  </MenuItem>
-                )}
-              </Menu>
+                  {isLoggedIn && (
+                    <ListItemButton
+                      component={Link}
+                      to={profilePath}
+                      onClick={handleMenuClose}
+                    >
+                      <ListItemText primary="Profile" />
+                    </ListItemButton>
+                  )}
+                </List>
+              </Drawer>
             </>
           )}
         </Toolbar>

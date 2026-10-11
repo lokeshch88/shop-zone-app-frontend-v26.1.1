@@ -28,13 +28,16 @@ import {
 import AddIcon from "@mui/icons-material/Add";
 import RemoveIcon from "@mui/icons-material/Remove";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
-import { useNavigate } from "react-router-dom";
+import ImageNotSupportedOutlinedIcon from "@mui/icons-material/ImageNotSupportedOutlined";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { useParams } from "react-router-dom";
 import axios from "../utils/AxiosInstance";
+import { validateCartForStore } from "../utils/MerchantCartValidation";
 
 const CartPage = () => {
   const [cartItems, setCartItems] = useState([]);
+  const [invalidCartItems, setInvalidCartItems] = useState([]);
   const [snackbar, setSnackbar] = useState({
     open: false,
     message: "",
@@ -57,6 +60,7 @@ const CartPage = () => {
   const [loginLoading, setLoginLoading] = useState(false);
 
   const navigate = useNavigate();
+  const location = useLocation();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
 
@@ -67,18 +71,142 @@ const CartPage = () => {
   const { slug } = useParams();
   // Load cart
   useEffect(() => {
-    const storedCart = JSON.parse(localStorage.getItem("cart")) || [];
+    let storedCart = [];
+    try {
+      const parsedCart = JSON.parse(localStorage.getItem("cart") || "[]");
+      storedCart = Array.isArray(parsedCart) ? parsedCart : [];
+    } catch (error) {
+      console.error("Failed to read cart:", error);
+    }
     setCartItems(storedCart);
   }, []);
 
+  useEffect(() => {
+    if (!location.state?.checkoutWarning) return;
+    setSnackbar({
+      open: true,
+      message: location.state.checkoutWarning,
+      severity: "warning",
+    });
+    setInvalidCartItems(location.state.invalidCartItems || []);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.pathname, location.state, navigate]);
+
   const updateCart = (newCart) => {
     setCartItems(newCart);
+    setInvalidCartItems((current) =>
+      current.filter((issue) =>
+        newCart.some(
+          (item) =>
+            String(item.id) === String(issue.productId) &&
+            (item.storeSlug || item.merchantSlug || slug) === issue.storeSlug,
+        ),
+      ),
+    );
     localStorage.setItem("cart", JSON.stringify(newCart));
     window.dispatchEvent(new Event("cartUpdated"));
   };
 
   const getItemKey = (item) =>
-    `${item.id}_${item.variant?.size || ""}_${item.variant?.color || ""}`;
+    `${item.storeSlug || item.merchantSlug || slug}_${item.id}_${item.variant?.selectionKey || `${item.variant?.size || ""}_${item.variant?.color || ""}`}`;
+
+  const validateCurrentCart = async (
+    registeredMerchantId = localStorage.getItem("merchantId"),
+  ) => {
+    try {
+      await validateCartForStore({
+        axios,
+        slug,
+        items: cartItems,
+        registeredMerchantId,
+      });
+      return true;
+    } catch (error) {
+      setInvalidCartItems(error?.invalidCartItems || []);
+      setSnackbar({
+        open: true,
+        message:
+          error?.response?.data?.message ||
+          error?.message ||
+          "We could not verify this cart for the current store.",
+        severity: "warning",
+      });
+      return false;
+    }
+  };
+
+  const getCheckoutItems = () =>
+    cartItems.map((item) => ({
+      productId: item.id,
+      size: item.variant?.size || null,
+      color: item.variant?.color || null,
+      quantity: item.quantity,
+      price: item.variant?.price || item.price,
+      name: item.name,
+      storeSlug: item.storeSlug || item.merchantSlug || slug,
+      storeName:
+        item.storeName || item.merchantName || item.businessName || null,
+      merchantId: item.merchantId || item.merchant?.id || null,
+    }));
+
+  const navigateToCheckout = (checkoutUserId) => {
+    navigate(`/store/${slug}/order/checkout`, {
+      state: {
+        userId: checkoutUserId,
+        items: getCheckoutItems(),
+        totalAmount: parseFloat(totalAmount),
+        itemCount: cartItems.reduce((sum, item) => sum + item.quantity, 0),
+      },
+    });
+  };
+
+  const getCartImage = (item) => {
+    const variantImages = [
+      ...(Array.isArray(item.variant?.images) ? item.variant.images : []),
+      ...(Array.isArray(item.variant?.imageUrls) ? item.variant.imageUrls : []),
+    ];
+    const primaryVariantImage =
+      variantImages.find(
+        (image) => image?.primaryImage === true || image?.isPrimary === true,
+      ) || variantImages[0];
+    const variantImage =
+      item.variant?.imageUrl ||
+      item.variant?.variantImageUrl ||
+      (typeof item.variant?.image === "string" ? item.variant.image : "") ||
+      primaryVariantImage?.imageUrl ||
+      primaryVariantImage?.url ||
+      primaryVariantImage?.image ||
+      (primaryVariantImage?.imageBase64
+        ? `data:image/jpeg;base64,${primaryVariantImage.imageBase64}`
+        : "") ||
+      (item.variant?.imageBase64
+        ? `data:image/jpeg;base64,${item.variant.imageBase64}`
+        : "");
+    const images = Array.isArray(item.images) ? item.images : [];
+    const primaryImage =
+      images.find((image) => image?.primaryImage || image?.isPrimary) ||
+      images[0];
+    const imageUrl =
+      variantImage ||
+      primaryImage?.imageUrl ||
+      primaryImage?.image ||
+      primaryImage?.preview ||
+      (primaryImage?.imageBase64
+        ? `data:image/jpeg;base64,${primaryImage.imageBase64}`
+        : "") ||
+      item.imageUrl ||
+      item.image ||
+      (item.imageBase64 ? `data:image/jpeg;base64,${item.imageBase64}` : "");
+
+    if (!imageUrl || typeof imageUrl !== "string") return "";
+    if (/^(https?:|data:|blob:)/i.test(imageUrl)) return imageUrl;
+
+    const apiBase = (axios.defaults.baseURL || window.location.origin).replace(
+      /\/+$/,
+      "",
+    );
+    return `${apiBase}/${imageUrl.replace(/^\/+/, "")}`;
+  };
 
   const incrementQty = (itemKey) => {
     const updated = cartItems.map((item) =>
@@ -153,6 +281,25 @@ const CartPage = () => {
       localStorage.setItem("userId", userIdValue || "");
       localStorage.setItem("userRole", userRole || "User");
       localStorage.setItem("merchantId", response.data.merchantId || "");
+      const merchant = response.data.merchant || {};
+      localStorage.setItem(
+        "merchantSlug",
+        response.data.merchantSlug ||
+          response.data.storeSlug ||
+          merchant.storeSlug ||
+          merchant.slug ||
+          slug,
+      );
+      localStorage.setItem(
+        "merchantName",
+        response.data.merchantName ||
+          merchant.businessName ||
+          merchant.storeName ||
+          merchant.name ||
+          slug,
+      );
+
+      if (!(await validateCurrentCart(response.data.merchantId))) return;
 
       setAuthModalOpen(false);
       setSnackbar({
@@ -162,21 +309,7 @@ const CartPage = () => {
       });
 
       setTimeout(() => {
-        navigate(`/store/${slug}/order/checkout`, {
-          state: {
-            userId: userIdValue,
-            items: cartItems.map((item) => ({
-              productId: item.id,
-              size: item.variant?.size || null,
-              color: item.variant?.color || null,
-              quantity: item.quantity,
-              price: item.variant?.price || item.price,
-              name: item.name,
-            })),
-            totalAmount: parseFloat(totalAmount),
-            itemCount: cartItems.reduce((sum, item) => sum + item.quantity, 0),
-          },
-        });
+        navigateToCheckout(userIdValue);
       }, 400);
     } catch (error) {
       console.error("Quick login failed:", error);
@@ -335,29 +468,13 @@ const CartPage = () => {
     }
   };
 
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
     if (!userId) {
       setAuthModalOpen(true);
       return;
     }
 
-    const items = cartItems.map((item) => ({
-      productId: item.id,
-      size: item.variant?.size || null,
-      color: item.variant?.color || null,
-      quantity: item.quantity,
-      price: item.variant?.price || item.price,
-      name: item.name,
-    }));
-
-    navigate(`/store/${slug}/order/checkout`, {
-      state: {
-        userId,
-        items,
-        totalAmount: parseFloat(totalAmount),
-        itemCount: cartItems.reduce((sum, item) => sum + item.quantity, 0),
-      },
-    });
+    if (await validateCurrentCart()) navigateToCheckout(userId);
   };
 
   // Save cart to backend
@@ -386,59 +503,145 @@ const CartPage = () => {
     navigate(`/store/${slug}/product/${productId}`);
   };
 
+  const getItemStoreSlug = (item) =>
+    item.storeSlug || item.merchantSlug || slug;
+  const getItemStoreName = (item) =>
+    item.storeName ||
+    item.merchantName ||
+    item.businessName ||
+    getItemStoreSlug(item);
+  const isCartItemInvalid = (item) => {
+    const itemStoreSlug = getItemStoreSlug(item);
+    return (
+      itemStoreSlug !== slug ||
+      invalidCartItems.some(
+        (issue) =>
+          String(issue.productId) === String(item.id) &&
+          issue.storeSlug === itemStoreSlug,
+      )
+    );
+  };
+  const renderStoreWarning = (item) => {
+    if (!isCartItemInvalid(item)) return null;
+    const itemStoreSlug = getItemStoreSlug(item);
+    const issue = invalidCartItems.find(
+      (entry) =>
+        String(entry.productId) === String(item.id) &&
+        entry.storeSlug === itemStoreSlug,
+    );
+
+    return (
+      <Alert severity="warning" sx={{ mx: 1, mb: 1, py: 0 }}>
+        <Typography variant="body2">
+          {issue?.reason || "This product is from a different store."} Store:{" "}
+          {getItemStoreName(item)}
+        </Typography>
+        <Button
+          size="small"
+          onClick={() =>
+            navigate(`/store/${encodeURIComponent(itemStoreSlug)}/`)
+          }
+          sx={{ px: 0, minWidth: 0, textTransform: "none" }}
+        >
+          Open /store/{itemStoreSlug}
+        </Button>
+      </Alert>
+    );
+  };
+
   // ==================== MOBILE LIST VIEW ====================
   const renderMobileList = () => (
     <Box>
       {cartItems.map((item) => {
         const itemKey = getItemKey(item);
         const price = item.variant?.price || item.price || 0;
+        const imageUrl = getCartImage(item);
+        const itemInvalid = isCartItemInvalid(item);
 
         return (
-          <Card key={itemKey} sx={{ mb: 2, borderRadius: 3 }}>
+          <Card
+            key={itemKey}
+            sx={{
+              mb: 1,
+              borderRadius: 1.5,
+              border: itemInvalid ? "1px solid #D32F2F" : "1px solid #E2E8F0",
+              boxShadow: "none",
+            }}
+          >
             <CardActionArea onClick={() => handleProductClick(item.id)}>
-              <CardContent sx={{ p: 2 }}>
-                <Box sx={{ display: "flex", gap: 2 }}>
-                  {/* <Box
+              <CardContent sx={{ p: 1.25, "&:last-child": { pb: 1.25 } }}>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
+                  <Box
                     sx={{
-                      width: 80,
-                      height: 80,
-                      flexShrink: 0,
-                      borderRadius: 2,
+                      width: 60,
+                      height: 60,
+                      flex: "0 0 60px",
+                      display: "grid",
+                      placeItems: "center",
+                      position: "relative",
                       overflow: "hidden",
-                      backgroundColor: "#f5f5f5",
+                      borderRadius: 1,
+                      bgcolor: "#F1F5F9",
+                      color: "#94A3B8",
                     }}
                   >
-                    <img
-                      src={item.image || "https://via.placeholder.com/80"}
-                      alt={item.name}
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "cover",
-                      }}
-                    />
-                  </Box> */}
+                    <ImageNotSupportedOutlinedIcon sx={{ fontSize: 25 }} />
+                    {imageUrl && (
+                      <Box
+                        component="img"
+                        src={imageUrl}
+                        alt={item.name || "Product"}
+                        onError={(event) => {
+                          event.currentTarget.style.display = "none";
+                        }}
+                        sx={{
+                          position: "absolute",
+                          inset: 0,
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "contain",
+                          p: 0.25,
+                          bgcolor: "#F1F5F9",
+                        }}
+                      />
+                    )}
+                  </Box>
 
                   <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography variant="subtitle1" fontWeight={600} noWrap>
+                    <Typography
+                      variant="subtitle2"
+                      fontWeight={700}
+                      sx={{
+                        lineHeight: 1.25,
+                        display: "-webkit-box",
+                        WebkitBoxOrient: "vertical",
+                        WebkitLineClamp: 2,
+                        overflow: "hidden",
+                        overflowWrap: "anywhere",
+                      }}
+                    >
                       {item.name}
                     </Typography>
 
-                    {item.variant?.size && (
-                      <Typography variant="body2" color="text.secondary">
-                        Size: {item.variant.size}
-                      </Typography>
-                    )}
-                    {item.variant?.color && (
-                      <Typography variant="body2" color="text.secondary">
-                        Color: {item.variant.color}
+                    {(item.variant?.selectionLabel ||
+                      item.variant?.size ||
+                      item.variant?.color) && (
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        noWrap
+                      >
+                        {item.variant?.selectionLabel ||
+                          [item.variant?.size, item.variant?.color]
+                            .filter(Boolean)
+                            .join(" · ")}
                       </Typography>
                     )}
 
                     <Typography
                       variant="subtitle2"
                       color="primary"
-                      sx={{ mt: 1 }}
+                      sx={{ mt: 0.5, lineHeight: 1.2 }}
                     >
                       ₹{price} × {item.quantity} = ₹
                       {(price * item.quantity).toFixed(2)}
@@ -448,23 +651,54 @@ const CartPage = () => {
               </CardContent>
             </CardActionArea>
 
+            {renderStoreWarning(item)}
+
             <Divider />
 
-            <CardActions sx={{ justifyContent: "space-between", px: 2, py: 1 }}>
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                <IconButton size="small" onClick={() => decrementQty(itemKey)}>
-                  <RemoveIcon fontSize="small" />
+            <CardActions
+              sx={{ justifyContent: "space-between", px: 1, py: 0.5 }}
+            >
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 0.25,
+                  borderRadius: 1,
+                  bgcolor: "#F1F5F9",
+                }}
+              >
+                <IconButton
+                  size="small"
+                  aria-label={`Decrease quantity of ${item.name}`}
+                  onClick={() => decrementQty(itemKey)}
+                  sx={{ width: 30, height: 30 }}
+                >
+                  <RemoveIcon sx={{ fontSize: 16 }} />
                 </IconButton>
-                <Typography sx={{ minWidth: 24, textAlign: "center" }}>
+                <Typography
+                  variant="body2"
+                  sx={{ minWidth: 20, textAlign: "center", fontWeight: 700 }}
+                >
                   {item.quantity}
                 </Typography>
-                <IconButton size="small" onClick={() => incrementQty(itemKey)}>
-                  <AddIcon fontSize="small" />
+                <IconButton
+                  size="small"
+                  aria-label={`Increase quantity of ${item.name}`}
+                  onClick={() => incrementQty(itemKey)}
+                  sx={{ width: 30, height: 30 }}
+                >
+                  <AddIcon sx={{ fontSize: 16 }} />
                 </IconButton>
               </Box>
 
-              <IconButton color="error" onClick={() => removeFromCart(itemKey)}>
-                <DeleteOutlineIcon />
+              <IconButton
+                size="small"
+                color="error"
+                aria-label={`Remove ${item.name} from cart`}
+                onClick={() => removeFromCart(itemKey)}
+                sx={{ width: 32, height: 32 }}
+              >
+                <DeleteOutlineIcon sx={{ fontSize: 19 }} />
               </IconButton>
             </CardActions>
           </Card>
@@ -479,64 +713,157 @@ const CartPage = () => {
       {cartItems.map((item) => {
         const itemKey = getItemKey(item);
         const price = item.variant?.price || item.price || 0;
+        const imageUrl = getCartImage(item);
+        const itemInvalid = isCartItemInvalid(item);
 
         return (
           <Grid item xs={12} sm={6} md={4} lg={3} key={itemKey}>
             <Card
               sx={{
                 height: "100%",
-                display: "flex",
-                flexDirection: "column",
-                borderRadius: 3,
+                border: itemInvalid ? "1px solid #D32F2F" : "1px solid #E2E8F0",
+                borderRadius: 1.5,
+                boxShadow: "none",
+                overflow: "hidden",
+                transition: "border-color 0.2s ease, box-shadow 0.2s ease",
+                "&:hover": {
+                  borderColor: "primary.light",
+                  boxShadow: "0 3px 12px rgba(15, 23, 42, 0.08)",
+                },
               }}
             >
-              <CardActionArea onClick={() => handleProductClick(item.id)}>
-                <CardContent sx={{ flexGrow: 1 }}>
-                  <Typography variant="h6" gutterBottom>
-                    {item.name}
-                  </Typography>
-
-                  {item.variant?.size && (
-                    <Typography variant="body2">
-                      Size: {item.variant.size}
-                    </Typography>
-                  )}
-                  {item.variant?.color && (
-                    <Typography variant="body2">
-                      Color: {item.variant.color}
-                    </Typography>
-                  )}
-
-                  <Typography
-                    variant="subtitle1"
-                    color="primary"
-                    sx={{ mt: 2 }}
+              <CardActionArea
+                onClick={() => handleProductClick(item.id)}
+                sx={{ display: "block" }}
+              >
+                <CardContent sx={{ p: 1.25, "&:last-child": { pb: 1.25 } }}>
+                  <Box
+                    sx={{ display: "flex", alignItems: "center", gap: 1.25 }}
                   >
-                    ₹{price} × {item.quantity} = ₹
-                    {(price * item.quantity).toFixed(2)}
-                  </Typography>
+                    <Box
+                      sx={{
+                        width: 60,
+                        height: 60,
+                        flex: "0 0 60px",
+                        display: "grid",
+                        placeItems: "center",
+                        position: "relative",
+                        overflow: "hidden",
+                        borderRadius: 1,
+                        bgcolor: "#F1F5F9",
+                        color: "#94A3B8",
+                      }}
+                    >
+                      <ImageNotSupportedOutlinedIcon sx={{ fontSize: 25 }} />
+                      {imageUrl && (
+                        <Box
+                          component="img"
+                          src={imageUrl}
+                          alt={item.name || "Product"}
+                          onError={(event) => {
+                            event.currentTarget.style.display = "none";
+                          }}
+                          sx={{
+                            position: "absolute",
+                            inset: 0,
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "contain",
+                            p: 0.25,
+                            bgcolor: "#F1F5F9",
+                          }}
+                        />
+                      )}
+                    </Box>
+                    <Box sx={{ minWidth: 0, flex: 1 }}>
+                      <Typography
+                        variant="subtitle2"
+                        sx={{
+                          fontWeight: 700,
+                          lineHeight: 1.25,
+                          display: "-webkit-box",
+                          WebkitBoxOrient: "vertical",
+                          WebkitLineClamp: 2,
+                          overflow: "hidden",
+                          overflowWrap: "anywhere",
+                        }}
+                      >
+                        {item.name}
+                      </Typography>
+                      {(item.variant?.selectionLabel ||
+                        item.variant?.size ||
+                        item.variant?.color) && (
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          noWrap
+                          sx={{ display: "block", mt: 0.25 }}
+                        >
+                          {item.variant?.selectionLabel ||
+                            [item.variant?.size, item.variant?.color]
+                              .filter(Boolean)
+                              .join(" · ")}
+                        </Typography>
+                      )}
+                      <Typography
+                        variant="caption"
+                        color="primary"
+                        sx={{ display: "block", mt: 0.5, fontWeight: 700 }}
+                      >
+                        ₹{price} × {item.quantity} = ₹
+                        {(price * item.quantity).toFixed(2)}
+                      </Typography>
+                    </Box>
+                  </Box>
                 </CardContent>
               </CardActionArea>
 
+              {renderStoreWarning(item)}
+
               <CardActions
-                sx={{ justifyContent: "space-between", px: 2, pb: 2 }}
+                sx={{ justifyContent: "space-between", px: 1, py: 0.5 }}
               >
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                  <Button size="small" onClick={() => decrementQty(itemKey)}>
-                    -
-                  </Button>
-                  <Typography>{item.quantity}</Typography>
-                  <Button size="small" onClick={() => incrementQty(itemKey)}>
-                    +
-                  </Button>
+                <Box
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 0.25,
+                    borderRadius: 1,
+                    bgcolor: "#F1F5F9",
+                  }}
+                >
+                  <IconButton
+                    size="small"
+                    aria-label={`Decrease quantity of ${item.name}`}
+                    onClick={() => decrementQty(itemKey)}
+                    sx={{ width: 30, height: 30 }}
+                  >
+                    <RemoveIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                  <Typography
+                    variant="body2"
+                    sx={{ minWidth: 20, textAlign: "center", fontWeight: 700 }}
+                  >
+                    {item.quantity}
+                  </Typography>
+                  <IconButton
+                    size="small"
+                    aria-label={`Increase quantity of ${item.name}`}
+                    onClick={() => incrementQty(itemKey)}
+                    sx={{ width: 30, height: 30 }}
+                  >
+                    <AddIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
                 </Box>
-                <Button
+                <IconButton
                   size="small"
                   color="error"
+                  aria-label={`Remove ${item.name} from cart`}
                   onClick={() => removeFromCart(itemKey)}
+                  sx={{ width: 32, height: 32 }}
                 >
-                  Remove
-                </Button>
+                  <DeleteOutlineIcon sx={{ fontSize: 19 }} />
+                </IconButton>
               </CardActions>
             </Card>
           </Grid>
@@ -550,6 +877,13 @@ const CartPage = () => {
       <Typography variant="h4" fontWeight={700} gutterBottom>
         Your Cart
       </Typography>
+
+      {cartItems.some(isCartItemInvalid) && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Products with store warnings are highlighted below. Remove them before
+          checkout.
+        </Alert>
+      )}
 
       {cartItems.length === 0 ? (
         <Box sx={{ textAlign: "center", py: 8 }}>
