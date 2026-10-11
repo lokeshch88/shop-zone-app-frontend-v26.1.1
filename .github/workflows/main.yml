@@ -1,0 +1,43 @@
+name: Deploy React Frontend
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    # Copy files straight onto AWS server
+    - name: Copy project files to AWS
+      uses: appleboy/scp-action@master
+      with:
+        host: ${{ secrets.AWS_EC2_IP }}
+        username: ubuntu
+        key: ${{ secrets.AWS_SSH_KEY }}
+        source: "package*.json,src/,public/,Dockerfile"
+        target: "~/shopzone/frontend"
+
+    # Build and deploy Nginx web layer on AWS
+    - name: SSH and Launch Frontend Container
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.AWS_EC2_IP }}
+        username: ubuntu
+        key: ${{ secrets.AWS_SSH_KEY }}
+        script: |
+          cd ~/shopzone/frontend
+          docker stop shopzone-frontend || true
+          docker rm shopzone-frontend || true
+          
+          docker build -t shopzone-frontend .
+          
+          # Run frontend container inside the shared network mapping Port 80 to web traffic
+          docker run -d \
+            --name shopzone-frontend \
+            --network shopzone-network \
+            -p 80:80 \
+            shopzone-frontend
