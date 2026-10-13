@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useCallback, useState } from "react";
 import {
   Alert,
   Box,
@@ -174,7 +174,7 @@ function ResourceManager({ resource }) {
   const [deleteCandidate, setDeleteCandidate] = useState(null);
   const [notice, setNotice] = useState("");
 
-  const loadRows = async () => {
+  const loadRows = useCallback(async () => {
     setLoading(true);
     setLoadError("");
     try {
@@ -186,11 +186,11 @@ function ResourceManager({ resource }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [resource.endpoint]);
 
   useEffect(() => {
     loadRows();
-  }, [resource.endpoint]);
+  }, [loadRows]);
 
   const openCreateDialog = () => {
     setEditingRow(null);
