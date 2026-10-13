@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   Container,
   Typography,
@@ -39,18 +39,18 @@ const UserManagement = () => {
 
   const loggedInUserId = localStorage.getItem("userId");
 
-  useEffect(() => {
-    fetchUsers();
-  }, []);
-
-  const fetchUsers = () => {
+  const fetchUsers = useCallback(() => {
     axios
       .get("/user/all", {
         headers: { Authorization: `Bearer ${token}` },
       })
       .then((res) => setUsers(res.data))
       .catch((err) => console.error("User fetch error:", err));
-  };
+  }, [token]);
+
+  useEffect(() => {
+    fetchUsers();
+  }, [fetchUsers]);
 
   const handleDeleteUser = (id) => {
     const confirmed = window.confirm(

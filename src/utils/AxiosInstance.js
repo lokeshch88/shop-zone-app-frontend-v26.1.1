@@ -4,6 +4,7 @@ import axios from "axios";
 
 const instance = axios.create({
   // baseURL: "http://localhost:8080",
+  // baseURL: "http://localhost:8080",
   // baseURL: "http://192.168.3.118:8080",
   //AWS instance
   baseURL: "http://32.236.64.240:8080",
