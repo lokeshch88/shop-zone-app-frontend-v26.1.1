@@ -1156,10 +1156,17 @@ const AdminDashboard = () => {
     : 0;
 
   const navItems = NAV_SECTIONS.flatMap((s) => s.items);
-  const filteredNavItems = searchTerm
-    ? navItems.filter((i) =>
-        i.label.toLowerCase().includes(searchTerm.toLowerCase()),
-      )
+  const searchTokens = searchTerm
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  const filteredNavItems = searchTokens.length
+    ? navItems.filter((item) => {
+        const labelTokens = item.label.toLowerCase().split(/[^a-z0-9]+/);
+        return searchTokens.every((searchToken) =>
+          labelTokens.some((labelToken) => labelToken.includes(searchToken)),
+        );
+      })
     : [];
 
   /* ── SIDEBAR ── */
@@ -1377,7 +1384,7 @@ const AdminDashboard = () => {
   );
 
   /* ── TOPBAR ── */
-  const Topbar = () => (
+  const renderTopbar = () => (
     <Box
       sx={{
         height: 54,
@@ -2727,7 +2734,7 @@ const AdminDashboard = () => {
           overflowX: "hidden",
         }}
       >
-        <Topbar />
+        {renderTopbar()}
 
         {/* Scrollable content area */}
         <Box

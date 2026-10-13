@@ -1,45 +1,35 @@
-name: Deploy React Frontend
+name: Deploy React Frontend to Amazon S3
 
 on:
   push:
     branches: [main]
 
 jobs:
-  build-and-deploy:
+  compile-and-publish:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v5
+      - name: Checkout Workspace Code
+        uses: actions/checkout@v4
 
-      # Copies your frontend workspace source code over to the AWS machine
-      - name: Copy project files to AWS
-        uses: appleboy/scp-action@master
+      - name: Initialize Node Environment
+        uses: actions/setup-node@v4
         with:
-          host: ${{ secrets.AWS_EC2_IP }}
-          username: ec2-user
-          key: ${{ secrets.AWS_SSH_KEY }}
-          source: "package*.json,src/,public/,Dockerfile"
-          target: "~/shopzone/frontend"
+          node-version: "18"
+          cache: "npm"
 
-      # Connects to AWS, triggers the multi-stage Nginx container build, and opens Port 80
-      - name: SSH and Launch Frontend Container
-        uses: appleboy/ssh-action@master
+      - name: Package Build Bundles
+        run: |
+          npm install
+          npm run build
+
+      # Configure AWS CLI authentication parameters dynamically on the runner
+      - name: Configure AWS Cloud Credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          host: ${{ secrets.AWS_EC2_IP }}
-          username: ec2-user
-          key: ${{ secrets.AWS_SSH_KEY }}
-          script: |
-            cd ~/shopzone/frontend
-            # Stop and remove old version if running
-            docker stop shopzone-frontend || true
-            docker rm shopzone-frontend || true
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
 
-            # Build the production-ready optimized Nginx image
-            docker build -t shopzone-frontend .
-
-            # Run frontend container mapping Port 80 directly to public web traffic
-            docker run -d \
-              --name shopzone-frontend \
-              --network shopzone-network \
-              -p 80:80 \
-              shopzone-frontend
+      # Syncs your compiled static build assets straight into your public S3 Bucket
+      - name: Push Static Assets to Amazon S3
+        run: aws s3 sync build/ s3://${{ secrets.AWS_S3_BUCKET_NAME }} --delete

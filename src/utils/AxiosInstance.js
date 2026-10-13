@@ -3,8 +3,10 @@
 import axios from "axios";
 
 const instance = axios.create({
-  baseURL: "http://localhost:8080",
+  // baseURL: "http://localhost:8080",
   // baseURL: "http://192.168.3.118:8080",
+  //AWS instance
+  baseURL: "http://32.236.64.240:8080",
 });
 
 const getCurrentMerchantSlug = () => {
@@ -105,14 +107,9 @@ instance.interceptors.response.use(
       }
     }
 
-    // Merchant doesn't belong to logged-in user
+    // A 403 can mean an endpoint-specific permission denial; it does not by
+    // itself prove that the signed-in user belongs to a different merchant.
     if (status === 403) {
-      const hasAuthToken = !!localStorage.getItem("authToken");
-
-      if (hasAuthToken && !isShoporaControl) {
-        alert("You are not authorized to access this merchant.");
-      }
-
       return Promise.reject(error);
     }
 
